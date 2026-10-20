@@ -11,7 +11,7 @@ screen.
 
 - Rust (install with [rustup](https://rustup.rs))
 - Node 20+ and pnpm
-- A kubeconfig at `~/.kube/config` or in `$KUBECONFIG`
+- A kubeconfig: `~/.kube/config`, `$KUBECONFIG`, or any file added in Settings (`⌘,`)
 
 ## Development
 
@@ -24,8 +24,9 @@ Build a release bundle with `pnpm tauri build`.
 
 ## Layout
 
+- `src-tauri/src/kubeconfig.rs`: kubeconfig files, default ones plus those added in Settings
 - `src-tauri/src/clients.rs`: one cached API client per kubeconfig context
 - `src-tauri/src/contexts.rs`: kubeconfig contexts and namespaces
 - `src-tauri/src/pods.rs`: pod watch, batched every 150 ms
 - `src/store.ts`: UI state and the live pod subscription
-- `src/components/`: sidebar, pods table, command palette (`⌘K`)
+- `src/components/`: sidebar, pods table, Settings (`⌘,`), command palette (`⌘K`)

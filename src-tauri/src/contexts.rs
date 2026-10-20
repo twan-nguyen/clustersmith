@@ -1,13 +1,14 @@
+use std::path::PathBuf;
+
 use k8s_openapi::api::core::v1::Namespace;
-use kube::{
-    Api, ResourceExt,
-    api::ListParams,
-    config::Kubeconfig,
-};
+use kube::{Api, ResourceExt, api::ListParams};
 use serde::Serialize;
 use tauri::State;
 
-use crate::clients::Clients;
+use crate::{
+    clients::Clients,
+    kubeconfig::{KubeconfigSources, SourceStatus},
+};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,11 +23,11 @@ pub struct KubeContext {
 pub struct ContextList {
     current: Option<String>,
     contexts: Vec<KubeContext>,
+    sources: Vec<SourceStatus>,
 }
 
-#[tauri::command]
-pub fn list_contexts() -> Result<ContextList, String> {
-    let kubeconfig = Kubeconfig::read().map_err(|e| e.to_string())?;
+fn context_list(sources: &KubeconfigSources) -> ContextList {
+    let (kubeconfig, statuses) = sources.read();
     let contexts = kubeconfig
         .contexts
         .into_iter()
@@ -40,18 +41,47 @@ pub fn list_contexts() -> Result<ContextList, String> {
         })
         .collect();
 
-    Ok(ContextList {
+    ContextList {
         current: kubeconfig.current_context,
         contexts,
-    })
+        sources: statuses,
+    }
+}
+
+#[tauri::command]
+pub fn list_contexts(sources: State<'_, KubeconfigSources>) -> ContextList {
+    context_list(&sources)
+}
+
+#[tauri::command]
+pub fn add_kubeconfig(
+    path: PathBuf,
+    sources: State<'_, KubeconfigSources>,
+    clients: State<'_, Clients>,
+) -> Result<ContextList, String> {
+    sources.add(path)?;
+    clients.clear();
+    Ok(context_list(&sources))
+}
+
+#[tauri::command]
+pub fn remove_kubeconfig(
+    path: PathBuf,
+    sources: State<'_, KubeconfigSources>,
+    clients: State<'_, Clients>,
+) -> Result<ContextList, String> {
+    sources.remove(&path)?;
+    clients.clear();
+    Ok(context_list(&sources))
 }
 
 #[tauri::command]
 pub async fn list_namespaces(
     context: String,
+    sources: State<'_, KubeconfigSources>,
     clients: State<'_, Clients>,
 ) -> Result<Vec<String>, String> {
-    let client = clients.get(&context).await?;
+    let client = clients.get(&sources, &context).await?;
     let namespaces = Api::<Namespace>::all(client)
         .list(&ListParams::default())
         .await

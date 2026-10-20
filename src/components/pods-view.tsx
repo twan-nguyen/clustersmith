@@ -1,8 +1,10 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, Box, Search } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
-import { Kbd } from "@/components/ui/kbd";
+import { NamespaceFilter } from "@/components/namespace-filter";
+import { Panel, PanelHeader } from "@/components/panel";
+import { Button } from "@/components/ui/button";
 import type { PodRow } from "@/lib/kube";
 import { type StatusTone, formatAge, statusTone, useNow } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -11,16 +13,17 @@ import { useStore } from "@/store";
 type SortKey = "name" | "namespace" | "status" | "restarts" | "age";
 
 const COLUMNS =
-  "grid grid-cols-[minmax(220px,2fr)_minmax(120px,1fr)_150px_64px_76px_56px_minmax(120px,1fr)] items-center gap-3 px-4";
+  "grid grid-cols-[minmax(220px,2fr)_minmax(120px,1fr)_150px_56px_72px_56px_minmax(110px,1fr)] items-center gap-4 px-5";
 
 const ROW_HEIGHT = 36;
 
+/** Ring color per tone; solid tones also fill the center, like Linear's status icons. */
 const TONE_CLASS: Record<StatusTone, string> = {
-  ok: "bg-success",
-  done: "bg-muted-foreground",
-  pending: "bg-warning",
-  failed: "bg-destructive",
-  unknown: "bg-muted-foreground/50",
+  ok: "border-success after:bg-success",
+  done: "border-muted-foreground after:bg-muted-foreground",
+  pending: "border-warning border-dashed",
+  failed: "border-destructive after:bg-destructive",
+  unknown: "border-muted-foreground/60",
 };
 
 const compare: Record<SortKey, (a: PodRow, b: PodRow) => number> = {
@@ -33,7 +36,17 @@ const compare: Record<SortKey, (a: PodRow, b: PodRow) => number> = {
 };
 
 export function PodsView() {
-  const { pods, podsLoaded, query, setQuery, error, context, setPaletteOpen } = useStore();
+  const {
+    pods,
+    podsLoaded,
+    query,
+    setQuery,
+    error,
+    context,
+    namespace,
+    selectNamespace,
+    setView,
+  } = useStore();
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({
     key: "name",
     desc: false,
@@ -61,114 +74,137 @@ export function PodsView() {
 
   const toggleSort = (key: SortKey) =>
     setSort((s) => ({ key, desc: s.key === key ? !s.desc : false }));
+  const retry = () => selectNamespace(namespace);
+
+  // The watch reconnects on its own; an error over loaded data is just a dropped stream.
+  const reconnecting = Boolean(error) && podsLoaded;
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col">
-      <header
-        data-tauri-drag-region
-        className="flex h-11 shrink-0 items-center gap-3 border-b border-border px-4"
-      >
+    <Panel>
+      <PanelHeader>
+        <Box className="size-4 text-muted-foreground" />
         <h1 className="font-medium">Pods</h1>
         <span className="text-muted-foreground tabular-nums">
-          {podsLoaded ? rows.length : "…"}
+          {podsLoaded ? rows.length : ""}
         </span>
-        <div className="ml-auto flex items-center gap-2">
-          <label className="flex h-7 w-64 items-center gap-2 rounded-md border border-input bg-muted px-2 focus-within:border-ring">
-            <Search className="size-3.5 text-muted-foreground" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Filter pods"
-              className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
-            />
-          </label>
-          <button
-            onClick={() => setPaletteOpen(true)}
-            className="flex h-7 items-center gap-1 rounded-md px-1.5 text-muted-foreground hover:bg-accent"
+        {context && <NamespaceFilter />}
+        {reconnecting && (
+          <span
+            title={error ?? undefined}
+            className="flex h-6 items-center gap-1.5 rounded-md px-2 text-xs text-warning"
           >
-            <Kbd>⌘</Kbd>
-            <Kbd>K</Kbd>
-          </button>
-        </div>
-      </header>
-
-      {error && (
-        <div className="border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-destructive">
-          {error}
-        </div>
-      )}
+            <span className="size-1.5 animate-pulse rounded-full bg-warning motion-reduce:animate-none" />
+            Reconnecting…
+          </span>
+        )}
+        <label className="ml-auto flex h-7 w-60 items-center gap-2 rounded-md px-2 text-muted-foreground hover:bg-accent focus-within:bg-accent">
+          <Search className="size-3.5" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter by name"
+            className="min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground"
+          />
+        </label>
+      </PanelHeader>
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
-        <div
-          className={cn(
-            COLUMNS,
-            "sticky top-0 z-10 h-8 border-b border-border bg-background text-xs text-muted-foreground",
-          )}
-        >
-          <SortHeader label="Name" column="name" sort={sort} onSort={toggleSort} />
-          <SortHeader label="Namespace" column="namespace" sort={sort} onSort={toggleSort} />
-          <SortHeader label="Status" column="status" sort={sort} onSort={toggleSort} />
-          <span>Ready</span>
-          <SortHeader label="Restarts" column="restarts" sort={sort} onSort={toggleSort} />
-          <SortHeader label="Age" column="age" sort={sort} onSort={toggleSort} />
-          <span>Node</span>
-        </div>
-
         {!context ? (
           <Empty
-            title="No kubeconfig found"
-            detail="ClusterSmith reads ~/.kube/config or the file set in $KUBECONFIG."
+            title="No clusters yet"
+            detail="Add a kubeconfig file in Settings to see its clusters here."
+            action={<Button onClick={() => setView("settings")}>Open Settings</Button>}
           />
-        ) : podsLoaded && rows.length === 0 ? (
+        ) : error && !podsLoaded ? (
+          <Empty
+            title="Can't load pods"
+            detail={error}
+            action={
+              <Button variant="outline" onClick={retry}>
+                Retry
+              </Button>
+            }
+          />
+        ) : !podsLoaded ? (
+          <Empty title="Loading pods…" />
+        ) : rows.length === 0 ? (
           <Empty title="No pods" detail={query ? "Nothing matches this filter." : undefined} />
         ) : (
-          <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
-            {virtualizer.getVirtualItems().map((item) => {
-              const pod = rows[item.index];
-              return (
-                <div
-                  key={pod.uid}
-                  className={cn(
-                    COLUMNS,
-                    "absolute inset-x-0 top-0 border-b border-border/60 hover:bg-accent/60",
-                  )}
+          <>
+            <div
+              className={cn(
+                COLUMNS,
+                "sticky top-0 z-10 h-8 border-b border-border bg-card text-xs text-muted-foreground",
+              )}
+            >
+              <SortHeader label="Name" column="name" sort={sort} onSort={toggleSort} />
+              <SortHeader label="Namespace" column="namespace" sort={sort} onSort={toggleSort} />
+              <SortHeader label="Status" column="status" sort={sort} onSort={toggleSort} />
+              <span>Ready</span>
+              <SortHeader label="Restarts" column="restarts" sort={sort} onSort={toggleSort} />
+              <SortHeader label="Age" column="age" sort={sort} onSort={toggleSort} />
+              <span>Node</span>
+            </div>
+            <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
+              {virtualizer.getVirtualItems().map((item) => (
+                <PodRowView
+                  key={rows[item.index].uid}
+                  pod={rows[item.index]}
+                  now={now}
                   style={{ height: item.size, transform: `translateY(${item.start}px)` }}
-                >
-                  <span className="truncate font-medium">{pod.name}</span>
-                  <span className="truncate text-muted-foreground">{pod.namespace}</span>
-                  <span className="flex items-center gap-2 truncate">
-                    <span
-                      className={cn(
-                        "size-1.5 shrink-0 rounded-full",
-                        TONE_CLASS[statusTone(pod.status)],
-                      )}
-                    />
-                    <span className="truncate">{pod.status}</span>
-                  </span>
-                  <span className="text-muted-foreground tabular-nums">
-                    {pod.ready}/{pod.containers}
-                  </span>
-                  <span
-                    className={cn(
-                      "tabular-nums",
-                      pod.restarts > 0 ? "text-warning" : "text-muted-foreground",
-                    )}
-                  >
-                    {pod.restarts}
-                  </span>
-                  <span className="text-muted-foreground tabular-nums">
-                    {formatAge(pod.createdAt, now)}
-                  </span>
-                  <span className="truncate font-mono text-xs text-muted-foreground">
-                    {pod.node ?? "—"}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+                />
+              ))}
+            </div>
+          </>
         )}
       </div>
-    </main>
+    </Panel>
+  );
+}
+
+function PodRowView({
+  pod,
+  now,
+  style,
+}: {
+  pod: PodRow;
+  now: number;
+  style: React.CSSProperties;
+}) {
+  return (
+    <div
+      className={cn(COLUMNS, "absolute inset-x-0 top-0 border-b border-border/50 hover:bg-accent")}
+      style={style}
+    >
+      <span className="truncate">{pod.name}</span>
+      <span className="truncate text-muted-foreground">{pod.namespace}</span>
+      <span className="flex items-center gap-2 truncate">
+        <StatusIcon tone={statusTone(pod.status)} />
+        <span className="truncate">{pod.status}</span>
+      </span>
+      <span className="text-muted-foreground tabular-nums">
+        {pod.ready}/{pod.containers}
+      </span>
+      <span
+        className={cn("tabular-nums", pod.restarts > 0 ? "text-warning" : "text-muted-foreground")}
+      >
+        {pod.restarts}
+      </span>
+      <span className="text-muted-foreground tabular-nums">{formatAge(pod.createdAt, now)}</span>
+      <span className="truncate text-muted-foreground">{pod.node ?? "—"}</span>
+    </div>
+  );
+}
+
+function StatusIcon({ tone }: { tone: StatusTone }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "relative size-3 shrink-0 rounded-full border-[1.5px] after:absolute after:inset-[2px] after:rounded-full",
+        TONE_CLASS[tone],
+      )}
+    />
   );
 }
 
@@ -187,7 +223,10 @@ function SortHeader({
   return (
     <button
       onClick={() => onSort(column)}
-      className="flex items-center gap-1 text-left hover:text-foreground"
+      className={cn(
+        "flex items-center gap-1 text-left hover:text-foreground",
+        sort.key === column && "text-foreground",
+      )}
     >
       {label}
       {sort.key === column && <Arrow className="size-3" />}
@@ -195,11 +234,20 @@ function SortHeader({
   );
 }
 
-function Empty({ title, detail }: { title: string; detail?: string }) {
+function Empty({
+  title,
+  detail,
+  action,
+}: {
+  title: string;
+  detail?: string;
+  action?: React.ReactNode;
+}) {
   return (
-    <div className="flex flex-col items-center gap-1 py-24 text-center">
+    <div className="flex flex-col items-center gap-1 px-8 py-24 text-center">
       <div className="font-medium">{title}</div>
-      {detail && <div className="text-muted-foreground">{detail}</div>}
+      {detail && <div className="max-w-md break-words text-muted-foreground">{detail}</div>}
+      {action && <div className="mt-3">{action}</div>}
     </div>
   );
 }

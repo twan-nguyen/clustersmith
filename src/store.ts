@@ -1,15 +1,23 @@
 import { create } from "zustand";
 
 import {
+  type ContextList,
   type KubeContext,
+  type KubeconfigSource,
   type PodRow,
+  addKubeconfig,
   listContexts,
   listNamespaces,
+  removeKubeconfig,
+  stopPodWatch,
   watchPods,
 } from "@/lib/kube";
 
+export type View = "pods" | "settings";
+
 type State = {
   contexts: KubeContext[];
+  sources: KubeconfigSource[];
   context: string | null;
   namespaces: string[];
   /** `null` means every namespace. */
@@ -19,12 +27,16 @@ type State = {
   query: string;
   error: string | null;
   paletteOpen: boolean;
+  view: View;
 
   init: () => Promise<void>;
+  addKubeconfig: (path: string) => Promise<void>;
+  removeKubeconfig: (path: string) => Promise<void>;
   selectContext: (name: string) => Promise<void>;
   selectNamespace: (namespace: string | null) => void;
   setQuery: (query: string) => void;
   setPaletteOpen: (open: boolean) => void;
+  setView: (view: View) => void;
 };
 
 const message = (error: unknown) =>
@@ -43,6 +55,8 @@ export const useStore = create<State>()((set, get) => {
       if (id !== watchId) return;
       if (event.type === "snapshot") {
         set({ pods: event.pods, podsLoaded: true, error: null });
+      } else if (event.type === "recovered") {
+        set({ error: null });
       } else {
         set({ error: event.message });
       }
@@ -51,8 +65,24 @@ export const useStore = create<State>()((set, get) => {
     });
   }
 
+  /** Keeps the selected context if it still exists, otherwise falls back. */
+  async function applyContexts({ current, contexts, sources }: ContextList) {
+    set({ contexts, sources });
+    const selected = get().context;
+    if (selected && contexts.some((c) => c.name === selected)) return;
+
+    const next = (current && contexts.some((c) => c.name === current) ? current : null)
+      ?? contexts[0]?.name;
+    if (next) return get().selectContext(next);
+
+    watchId++;
+    set({ context: null, namespace: null, namespaces: [], pods: [], podsLoaded: false });
+    await stopPodWatch();
+  }
+
   return {
     contexts: [],
+    sources: [],
     context: null,
     namespaces: [],
     namespace: null,
@@ -61,16 +91,22 @@ export const useStore = create<State>()((set, get) => {
     query: "",
     error: null,
     paletteOpen: false,
+    view: "pods",
 
     async init() {
       try {
-        const { current, contexts } = await listContexts();
-        set({ contexts });
-        const initial = current ?? contexts[0]?.name;
-        if (initial) await get().selectContext(initial);
+        await applyContexts(await listContexts());
       } catch (error) {
         set({ error: message(error) });
       }
+    },
+
+    async addKubeconfig(path) {
+      await applyContexts(await addKubeconfig(path));
+    },
+
+    async removeKubeconfig(path) {
+      await applyContexts(await removeKubeconfig(path));
     },
 
     async selectContext(name) {
@@ -91,5 +127,6 @@ export const useStore = create<State>()((set, get) => {
 
     setQuery: (query) => set({ query }),
     setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+    setView: (view) => set({ view }),
   };
 });

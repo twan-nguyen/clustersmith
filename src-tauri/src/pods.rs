@@ -11,6 +11,7 @@ use futures::StreamExt;
 use k8s_openapi::{api::core::v1::Pod, apimachinery::pkg::apis::meta::v1::Time};
 use kube::{
     Api, ResourceExt,
+    api::ListParams,
     runtime::{WatchStreamExt, reflector, watcher},
 };
 use serde::Serialize;
@@ -19,13 +20,19 @@ use tauri::{
     async_runtime::{self, JoinHandle},
     ipc::Channel,
 };
-use tokio::time::{MissedTickBehavior, interval};
+use tokio::time::{MissedTickBehavior, interval, timeout};
 
-use crate::clients::Clients;
+use crate::{clients::Clients, kubeconfig::KubeconfigSources};
 
 /// Changes are coalesced and pushed to the UI at most this often, so a burst
 /// of pod events costs one render instead of hundreds.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(150);
+
+/// While the API is unreachable, check it this often to report recovery.
+const HEALTH_INTERVAL: Duration = Duration::from_secs(5);
+
+/// A reachability probe that takes longer than this counts as a failure.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Only one pod watch runs at a time: the one for the view on screen.
 #[derive(Default)]
@@ -51,8 +58,14 @@ pub struct PodRow {
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum PodEvent {
-    Snapshot { pods: Vec<PodRow> },
-    Error { message: String },
+    Snapshot {
+        pods: Vec<PodRow>,
+    },
+    Error {
+        message: String,
+    },
+    /// The API answers again after an `Error`.
+    Recovered,
 }
 
 #[tauri::command]
@@ -60,12 +73,13 @@ pub async fn watch_pods(
     context: String,
     namespace: Option<String>,
     on_event: Channel<PodEvent>,
+    sources: State<'_, KubeconfigSources>,
     clients: State<'_, Clients>,
     watch: State<'_, PodWatch>,
 ) -> Result<(), String> {
     // A newer call may start while this one awaits the client; the newer one wins.
     let generation = watch.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    let client = clients.get(&context).await?;
+    let client = clients.get(&sources, &context).await?;
     if watch.generation.load(Ordering::SeqCst) != generation {
         return Ok(());
     }
@@ -81,14 +95,25 @@ pub async fn watch_pods(
     Ok(())
 }
 
+#[tauri::command]
+pub fn stop_pod_watch(watch: State<'_, PodWatch>) {
+    watch.generation.fetch_add(1, Ordering::SeqCst);
+    if let Some(task) = watch.task.lock().unwrap().take() {
+        task.abort();
+    }
+}
+
 async fn run_watch(api: Api<Pod>, channel: Channel<PodEvent>) {
     let (store, writer) = reflector::store::<Pod>();
     let mut events =
-        pin!(reflector(writer, watcher(api, watcher::Config::default())).default_backoff());
+        pin!(reflector(writer, watcher(api.clone(), watcher::Config::default())).default_backoff());
     let mut ticker = interval(FLUSH_INTERVAL);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut health = interval(HEALTH_INTERVAL);
+    health.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut ready = false;
     let mut dirty = false;
+    let mut disconnected = false;
 
     loop {
         tokio::select! {
@@ -98,14 +123,29 @@ async fn run_watch(api: Api<Pod>, channel: Channel<PodEvent>) {
                     dirty = true;
                 }
                 Some(Ok(_)) => dirty = true,
+                // Load balancers cut idle watch connections, and the watcher then
+                // resumes from its last version without emitting anything. So a
+                // stream error is only reported when the API itself stops answering.
                 Some(Err(err)) => {
-                    let message = err.to_string();
-                    if channel.send(PodEvent::Error { message }).is_err() {
-                        return;
+                    if !disconnected && !reachable(&api).await {
+                        disconnected = true;
+                        let message = err.to_string();
+                        if channel.send(PodEvent::Error { message }).is_err() {
+                            return;
+                        }
                     }
                 }
                 None => return,
             },
+            _ = health.tick(), if disconnected => {
+                if reachable(&api).await {
+                    disconnected = false;
+                    dirty = true;
+                    if channel.send(PodEvent::Recovered).is_err() {
+                        return;
+                    }
+                }
+            }
             _ = ticker.tick(), if ready && dirty => {
                 dirty = false;
                 let mut pods: Vec<PodRow> = store.state().iter().map(|pod| pod_row(pod)).collect();
@@ -116,6 +156,13 @@ async fn run_watch(api: Api<Pod>, channel: Channel<PodEvent>) {
             }
         }
     }
+}
+
+/// Cheapest request that proves the API answers for this scope.
+async fn reachable(api: &Api<Pod>) -> bool {
+    let params = ListParams::default().limit(1);
+    let probe = api.list_metadata(&params);
+    matches!(timeout(PROBE_TIMEOUT, probe).await, Ok(Ok(_)))
 }
 
 fn pod_row(pod: &Pod) -> PodRow {
@@ -162,4 +209,17 @@ fn pod_status(pod: &Pod) -> String {
         .or_else(|| status.and_then(|s| s.reason.clone()))
         .or_else(|| status.and_then(|s| s.phase.clone()))
         .unwrap_or_else(|| "Unknown".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unreachable_api_is_detected() {
+        // Nothing listens on port 1, so the probe fails fast.
+        let config = kube::Config::new("https://127.0.0.1:1".parse().unwrap());
+        let client = kube::Client::try_from(config).unwrap();
+        assert!(!reachable(&Api::<Pod>::all(client)).await);
+    }
 }

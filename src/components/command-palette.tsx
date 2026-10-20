@@ -1,4 +1,4 @@
-import { Box, Layers, Server } from "lucide-react";
+import { Box, Layers, Server, Settings } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -9,6 +9,7 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandShortcut,
 } from "@/components/ui/command";
 import { useStore } from "@/store";
 
@@ -25,6 +26,7 @@ export function CommandPalette() {
     selectContext,
     selectNamespace,
     setQuery,
+    setView,
   } = useStore();
   const [search, setSearch] = useState("");
 
@@ -66,6 +68,16 @@ export function CommandPalette() {
         />
         <CommandList>
           <CommandEmpty>No results.</CommandEmpty>
+
+          {(matches("settings") || matches("kubeconfig files")) && (
+            <CommandGroup heading="Actions">
+              <CommandItem value="action:settings" onSelect={() => run(() => setView("settings"))}>
+                <Settings />
+                Settings
+                <CommandShortcut>⌘,</CommandShortcut>
+              </CommandItem>
+            </CommandGroup>
+          )}
 
           <CommandGroup heading="Contexts">
             {contexts
