@@ -23,6 +23,7 @@ pub fn run() {
             contexts::list_contexts,
             contexts::add_kubeconfig,
             contexts::remove_kubeconfig,
+            contexts::update_cluster,
             contexts::list_namespaces,
             pods::watch_pods,
             pods::stop_pod_watch,

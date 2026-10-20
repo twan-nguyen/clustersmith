@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -7,19 +8,33 @@ use std::{
 use kube::config::Kubeconfig;
 use serde::{Deserialize, Serialize};
 
+/// How the user wants a context shown. The kubeconfig itself is never edited.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterPrefs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Avatar hue in OKLCH degrees; `None` derives one from the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hue: Option<u16>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Settings {
     #[serde(default)]
     kubeconfigs: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    clusters: BTreeMap<String, ClusterPrefs>,
 }
 
 /// Where contexts come from: the files `kubectl` would read, plus files the
 /// user imported. Imported files are referenced by path, not copied, so tools
 /// that rewrite them (for example `aws eks update-kubeconfig`) stay in sync.
+/// The same settings file also keeps how each context is shown.
 pub struct KubeconfigSources {
     settings_file: PathBuf,
     defaults: Vec<PathBuf>,
-    imported: Mutex<Vec<PathBuf>>,
+    settings: Mutex<Settings>,
 }
 
 #[derive(Serialize)]
@@ -34,11 +49,10 @@ pub struct SourceStatus {
 impl KubeconfigSources {
     pub fn load(config_dir: PathBuf, home_dir: PathBuf) -> Self {
         let settings_file = config_dir.join("settings.json");
-        let imported = fs::read(&settings_file)
+        let settings = fs::read(&settings_file)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok())
-            .unwrap_or_default()
-            .kubeconfigs;
+            .unwrap_or_default();
         let defaults = match std::env::var_os("KUBECONFIG") {
             Some(value) if !value.is_empty() => std::env::split_paths(&value)
                 .filter(|p| !p.as_os_str().is_empty())
@@ -49,7 +63,7 @@ impl KubeconfigSources {
         Self {
             settings_file,
             defaults,
-            imported: Mutex::new(imported),
+            settings: Mutex::new(settings),
         }
     }
 
@@ -57,7 +71,7 @@ impl KubeconfigSources {
     /// name wins. A missing default file is skipped silently; any other file
     /// that cannot be read is skipped and reported in its status.
     pub fn read(&self) -> (Kubeconfig, Vec<SourceStatus>) {
-        let imported = self.imported.lock().unwrap().clone();
+        let imported = self.settings.lock().unwrap().kubeconfigs.clone();
         let defaults = self.defaults.iter().filter(|p| p.exists()).cloned();
         let sources = defaults
             .map(|p| (p, false))
@@ -89,28 +103,50 @@ impl KubeconfigSources {
 
     pub fn add(&self, path: PathBuf) -> Result<(), String> {
         Kubeconfig::read_from(&path).map_err(|e| e.to_string())?;
-        let mut imported = self.imported.lock().unwrap();
-        if self.defaults.contains(&path) || imported.contains(&path) {
+        let mut settings = self.settings.lock().unwrap();
+        if self.defaults.contains(&path) || settings.kubeconfigs.contains(&path) {
             return Ok(());
         }
-        imported.push(path);
-        self.save(&imported)
+        settings.kubeconfigs.push(path);
+        self.save(&settings)
     }
 
     pub fn remove(&self, path: &Path) -> Result<(), String> {
-        let mut imported = self.imported.lock().unwrap();
-        imported.retain(|p| p != path);
-        self.save(&imported)
+        let mut settings = self.settings.lock().unwrap();
+        settings.kubeconfigs.retain(|p| p != path);
+        self.save(&settings)
     }
 
-    fn save(&self, imported: &[PathBuf]) -> Result<(), String> {
+    pub fn cluster_prefs(&self) -> BTreeMap<String, ClusterPrefs> {
+        self.settings.lock().unwrap().clusters.clone()
+    }
+
+    /// Stores how `context` is shown. A blank name, or the context's own name,
+    /// means "no custom name"; prefs with nothing set are dropped.
+    pub fn set_cluster_prefs(&self, context: &str, prefs: ClusterPrefs) -> Result<(), String> {
+        let display_name = prefs
+            .display_name
+            .map(|n| n.trim().to_owned())
+            .filter(|n| !n.is_empty() && n != context);
+        let prefs = ClusterPrefs {
+            display_name,
+            hue: prefs.hue.map(|h| h % 360),
+        };
+
+        let mut settings = self.settings.lock().unwrap();
+        if prefs.display_name.is_none() && prefs.hue.is_none() {
+            settings.clusters.remove(context);
+        } else {
+            settings.clusters.insert(context.to_owned(), prefs);
+        }
+        self.save(&settings)
+    }
+
+    fn save(&self, settings: &Settings) -> Result<(), String> {
         if let Some(dir) = self.settings_file.parent() {
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let settings = Settings {
-            kubeconfigs: imported.to_vec(),
-        };
-        let json = serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?;
+        let json = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
         fs::write(&self.settings_file, json).map_err(|e| e.to_string())
     }
 }
@@ -188,5 +224,30 @@ users:
         let status = statuses.iter().find(|s| s.path == file).unwrap();
         assert_eq!(status.contexts, 0);
         assert!(status.error.is_some());
+    }
+
+    #[test]
+    fn cluster_prefs_are_normalized_and_remembered() {
+        let dir = temp_dir("prefs");
+        let sources = KubeconfigSources::load(dir.join("app"), dir.clone());
+        let prefs = |name: &str, hue| ClusterPrefs {
+            display_name: Some(name.to_owned()),
+            hue,
+        };
+
+        sources
+            .set_cluster_prefs("admin@prod", prefs("  Production  ", Some(400)))
+            .unwrap();
+        let reopened = KubeconfigSources::load(dir.join("app"), dir.clone());
+        let saved = &reopened.cluster_prefs()["admin@prod"];
+        assert_eq!(saved.display_name.as_deref(), Some("Production"));
+        assert_eq!(saved.hue, Some(40));
+
+        // Renaming back to the context's own name with no color clears it.
+        reopened
+            .set_cluster_prefs("admin@prod", prefs("admin@prod", None))
+            .unwrap();
+        let reopened = KubeconfigSources::load(dir.join("app"), dir.clone());
+        assert!(reopened.cluster_prefs().is_empty());
     }
 }

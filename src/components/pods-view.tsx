@@ -1,6 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, Box, Search } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { ArrowUp, Box, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { NamespaceFilter } from "@/components/namespace-filter";
 import { Panel, PanelHeader } from "@/components/panel";
@@ -21,7 +21,8 @@ const ROW_HEIGHT = 36;
 const TONE_CLASS: Record<StatusTone, string> = {
   ok: "border-success after:bg-success",
   done: "border-muted-foreground after:bg-muted-foreground",
-  pending: "border-warning border-dashed",
+  // A slowly turning dashed ring reads as "in progress", like Linear's icon.
+  pending: "border-warning border-dashed animate-spin-slow",
   failed: "border-destructive after:bg-destructive",
   unknown: "border-muted-foreground/60",
 };
@@ -82,7 +83,7 @@ export function PodsView() {
   return (
     <Panel>
       <PanelHeader>
-        <Box className="size-4 text-muted-foreground" />
+        <Box className="size-4 shrink-0 text-muted-foreground" />
         <h1 className="font-medium">Pods</h1>
         <span className="text-muted-foreground tabular-nums">
           {podsLoaded ? rows.length : ""}
@@ -91,13 +92,13 @@ export function PodsView() {
         {reconnecting && (
           <span
             title={error ?? undefined}
-            className="flex h-6 items-center gap-1.5 rounded-md px-2 text-xs text-warning"
+            className="flex h-6 animate-fade-in items-center gap-1.5 rounded-md px-2 text-xs text-warning"
           >
             <span className="size-1.5 animate-pulse rounded-full bg-warning motion-reduce:animate-none" />
             Reconnecting…
           </span>
         )}
-        <label className="ml-auto flex h-7 w-60 items-center gap-2 rounded-md px-2 text-muted-foreground hover:bg-accent focus-within:bg-accent">
+        <label className="ml-auto flex h-7 w-60 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors duration-100 hover:bg-accent focus-within:bg-accent">
           <Search className="size-3.5" />
           <input
             value={query}
@@ -126,7 +127,7 @@ export function PodsView() {
             }
           />
         ) : !podsLoaded ? (
-          <Empty title="Loading pods…" />
+          <SkeletonRows />
         ) : rows.length === 0 ? (
           <Empty title="No pods" detail={query ? "Nothing matches this filter." : undefined} />
         ) : (
@@ -162,6 +163,22 @@ export function PodsView() {
   );
 }
 
+/**
+ * Counts changes to what an operator watches for, so the row can flash. The
+ * first render never counts: rows also mount when scrolled into view.
+ */
+function useChangeCount(pod: PodRow) {
+  const signature = `${pod.status}|${pod.restarts}|${pod.ready}`;
+  const previous = useRef(signature);
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (previous.current === signature) return;
+    previous.current = signature;
+    setCount((c) => c + 1);
+  }, [signature]);
+  return count;
+}
+
 function PodRowView({
   pod,
   now,
@@ -171,11 +188,23 @@ function PodRowView({
   now: number;
   style: React.CSSProperties;
 }) {
+  const changes = useChangeCount(pod);
   return (
     <div
-      className={cn(COLUMNS, "absolute inset-x-0 top-0 border-b border-border/50 hover:bg-accent")}
+      className={cn(
+        COLUMNS,
+        "absolute inset-x-0 top-0 border-b border-border/50 transition-colors duration-100 hover:bg-accent",
+      )}
       style={style}
     >
+      {changes > 0 && (
+        // Remounting by key restarts the fade for every new change.
+        <span
+          key={changes}
+          aria-hidden
+          className="pointer-events-none absolute inset-0 animate-row-flash bg-primary/12"
+        />
+      )}
       <span className="truncate">{pod.name}</span>
       <span className="truncate text-muted-foreground">{pod.namespace}</span>
       <span className="flex items-center gap-2 truncate">
@@ -219,17 +248,24 @@ function SortHeader({
   sort: { key: SortKey; desc: boolean };
   onSort: (key: SortKey) => void;
 }) {
-  const Arrow = sort.desc ? ArrowDown : ArrowUp;
+  const active = sort.key === column;
   return (
     <button
       onClick={() => onSort(column)}
       className={cn(
-        "flex items-center gap-1 text-left hover:text-foreground",
-        sort.key === column && "text-foreground",
+        "flex items-center gap-1 text-left transition-colors duration-100 hover:text-foreground",
+        active && "text-foreground",
       )}
     >
       {label}
-      {sort.key === column && <Arrow className="size-3" />}
+      {active && (
+        <ArrowUp
+          className={cn(
+            "size-3 animate-fade-in transition-transform duration-150 ease-out-quart",
+            sort.desc && "rotate-180",
+          )}
+        />
+      )}
     </button>
   );
 }
@@ -244,10 +280,35 @@ function Empty({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center gap-1 px-8 py-24 text-center">
+    <div className="flex animate-fade-in flex-col items-center gap-1 px-8 py-24 text-center">
       <div className="font-medium">{title}</div>
       {detail && <div className="max-w-md break-words text-muted-foreground">{detail}</div>}
       {action && <div className="mt-3">{action}</div>}
+    </div>
+  );
+}
+
+/** Placeholder rows shaped like the table while the first snapshot loads. */
+const SKELETON_WIDTHS = ["72%", "58%", "80%", "64%", "76%", "52%", "68%", "60%"];
+
+function SkeletonRows() {
+  return (
+    <div aria-label="Loading pods" role="status" className="animate-fade-in">
+      {SKELETON_WIDTHS.map((width, i) => (
+        <div
+          key={i}
+          className={cn(COLUMNS, "border-b border-border/50")}
+          style={{ height: ROW_HEIGHT }}
+        >
+          <span className="h-3 animate-pulse rounded bg-muted-foreground/15" style={{ width }} />
+          <span className="h-3 w-3/5 animate-pulse rounded bg-muted-foreground/10" />
+          <span className="h-3 w-2/5 animate-pulse rounded bg-muted-foreground/10" />
+          <span className="h-3 w-6 animate-pulse rounded bg-muted-foreground/10" />
+          <span className="h-3 w-4 animate-pulse rounded bg-muted-foreground/10" />
+          <span className="h-3 w-6 animate-pulse rounded bg-muted-foreground/10" />
+          <span className="h-3 w-1/2 animate-pulse rounded bg-muted-foreground/10" />
+        </div>
+      ))}
     </div>
   );
 }

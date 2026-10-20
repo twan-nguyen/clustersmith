@@ -7,7 +7,7 @@ use tauri::State;
 
 use crate::{
     clients::Clients,
-    kubeconfig::{KubeconfigSources, SourceStatus},
+    kubeconfig::{ClusterPrefs, KubeconfigSources, SourceStatus},
 };
 
 #[derive(Serialize)]
@@ -16,6 +16,8 @@ pub struct KubeContext {
     name: String,
     cluster: String,
     namespace: Option<String>,
+    display_name: Option<String>,
+    hue: Option<u16>,
 }
 
 #[derive(Serialize)]
@@ -28,15 +30,19 @@ pub struct ContextList {
 
 fn context_list(sources: &KubeconfigSources) -> ContextList {
     let (kubeconfig, statuses) = sources.read();
+    let mut prefs = sources.cluster_prefs();
     let contexts = kubeconfig
         .contexts
         .into_iter()
         .map(|named| {
             let context = named.context.unwrap_or_default();
+            let prefs = prefs.remove(&named.name).unwrap_or_default();
             KubeContext {
                 name: named.name,
                 cluster: context.cluster,
                 namespace: context.namespace,
+                display_name: prefs.display_name,
+                hue: prefs.hue,
             }
         })
         .collect();
@@ -72,6 +78,16 @@ pub fn remove_kubeconfig(
 ) -> Result<ContextList, String> {
     sources.remove(&path)?;
     clients.clear();
+    Ok(context_list(&sources))
+}
+
+#[tauri::command]
+pub fn update_cluster(
+    name: String,
+    prefs: ClusterPrefs,
+    sources: State<'_, KubeconfigSources>,
+) -> Result<ContextList, String> {
+    sources.set_cluster_prefs(&name, prefs)?;
     Ok(context_list(&sources))
 }
 

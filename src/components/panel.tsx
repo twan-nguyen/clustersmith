@@ -1,7 +1,10 @@
 import { cn } from "@/lib/utils";
 
-/** The rounded content panel that floats above the window canvas. */
-export function Panel({ className, ...props }: React.ComponentProps<"main">) {
+/**
+ * The rounded content panel that floats above the window canvas. The frame
+ * stays put when switching views; only its content eases in.
+ */
+export function Panel({ className, children, ...props }: React.ComponentProps<"main">) {
   return (
     <main
       className={cn(
@@ -9,7 +12,9 @@ export function Panel({ className, ...props }: React.ComponentProps<"main">) {
         className,
       )}
       {...props}
-    />
+    >
+      <div className="flex min-h-0 flex-1 animate-view-in flex-col">{children}</div>
+    </main>
   );
 }
 

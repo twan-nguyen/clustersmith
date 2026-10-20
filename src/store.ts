@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import {
+  type ClusterPrefs,
   type ContextList,
   type KubeContext,
   type KubeconfigSource,
@@ -10,10 +11,13 @@ import {
   listNamespaces,
   removeKubeconfig,
   stopPodWatch,
+  updateCluster,
   watchPods,
 } from "@/lib/kube";
+import { errorMessage } from "@/lib/utils";
 
 export type View = "pods" | "settings";
+export type SettingsPage = "clusters" | "kubeconfig";
 
 type State = {
   contexts: KubeContext[];
@@ -28,19 +32,19 @@ type State = {
   error: string | null;
   paletteOpen: boolean;
   view: View;
+  settingsPage: SettingsPage;
 
   init: () => Promise<void>;
   addKubeconfig: (path: string) => Promise<void>;
   removeKubeconfig: (path: string) => Promise<void>;
+  updateCluster: (name: string, prefs: ClusterPrefs) => Promise<void>;
   selectContext: (name: string) => Promise<void>;
   selectNamespace: (namespace: string | null) => void;
   setQuery: (query: string) => void;
   setPaletteOpen: (open: boolean) => void;
   setView: (view: View) => void;
+  setSettingsPage: (page: SettingsPage) => void;
 };
-
-const message = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
 
 // Each watch gets a number; events from a replaced watch are dropped.
 let watchId = 0;
@@ -61,7 +65,7 @@ export const useStore = create<State>()((set, get) => {
         set({ error: event.message });
       }
     }).catch((error) => {
-      if (id === watchId) set({ error: message(error) });
+      if (id === watchId) set({ error: errorMessage(error) });
     });
   }
 
@@ -92,12 +96,13 @@ export const useStore = create<State>()((set, get) => {
     error: null,
     paletteOpen: false,
     view: "pods",
+    settingsPage: "clusters",
 
     async init() {
       try {
         await applyContexts(await listContexts());
       } catch (error) {
-        set({ error: message(error) });
+        set({ error: errorMessage(error) });
       }
     },
 
@@ -109,6 +114,10 @@ export const useStore = create<State>()((set, get) => {
       await applyContexts(await removeKubeconfig(path));
     },
 
+    async updateCluster(name, prefs) {
+      await applyContexts(await updateCluster(name, prefs));
+    },
+
     async selectContext(name) {
       set({ context: name, namespace: null, namespaces: [] });
       startWatch();
@@ -116,7 +125,7 @@ export const useStore = create<State>()((set, get) => {
         const namespaces = await listNamespaces(name);
         if (get().context === name) set({ namespaces });
       } catch (error) {
-        if (get().context === name) set({ error: message(error) });
+        if (get().context === name) set({ error: errorMessage(error) });
       }
     },
 
@@ -128,5 +137,6 @@ export const useStore = create<State>()((set, get) => {
     setQuery: (query) => set({ query }),
     setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
     setView: (view) => set({ view }),
+    setSettingsPage: (settingsPage) => set({ settingsPage }),
   };
 });

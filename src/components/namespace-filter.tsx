@@ -26,10 +26,10 @@ export function NamespaceFilter() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button className="flex h-6 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground data-[state=open]:bg-accent">
+        <button className="group flex h-6 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-muted-foreground transition-colors duration-100 hover:bg-accent hover:text-foreground data-[state=open]:bg-accent">
           <Layers className="size-3.5" />
           <span className="max-w-48 truncate text-foreground">{namespace ?? "All namespaces"}</span>
-          <ChevronDown className="size-3" />
+          <ChevronDown className="size-3 transition-transform duration-150 ease-out-quart group-data-[state=open]:rotate-180" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-0">

@@ -11,6 +11,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command";
+import { contextLabel } from "@/lib/kube";
 import { useStore } from "@/store";
 
 /** Pods can number in the thousands; the palette shows the best few. */
@@ -69,7 +70,7 @@ export function CommandPalette() {
         <CommandList>
           <CommandEmpty>No results.</CommandEmpty>
 
-          {(matches("settings") || matches("kubeconfig files")) && (
+          {(matches("settings") || matches("clusters") || matches("kubeconfig files")) && (
             <CommandGroup heading="Actions">
               <CommandItem value="action:settings" onSelect={() => run(() => setView("settings"))}>
                 <Settings />
@@ -81,7 +82,7 @@ export function CommandPalette() {
 
           <CommandGroup heading="Contexts">
             {contexts
-              .filter((c) => matches(c.name))
+              .filter((c) => matches(contextLabel(c)) || matches(c.name))
               .map((c) => (
                 <CommandItem
                   key={c.name}
@@ -89,7 +90,7 @@ export function CommandPalette() {
                   onSelect={() => run(() => selectContext(c.name))}
                 >
                   <Server />
-                  {c.name}
+                  {contextLabel(c)}
                 </CommandItem>
               ))}
           </CommandGroup>

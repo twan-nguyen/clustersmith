@@ -4,7 +4,18 @@ export type KubeContext = {
   name: string;
   cluster: string;
   namespace: string | null;
+  /** Set in Settings; the kubeconfig keeps its own name. */
+  displayName: string | null;
+  /** Avatar hue in OKLCH degrees; `null` derives one from the name. */
+  hue: number | null;
 };
+
+export type ClusterPrefs = {
+  displayName: string | null;
+  hue: number | null;
+};
+
+export const contextLabel = (context: KubeContext) => context.displayName ?? context.name;
 
 export type KubeconfigSource = {
   path: string;
@@ -44,6 +55,9 @@ export const addKubeconfig = (path: string) =>
 
 export const removeKubeconfig = (path: string) =>
   invoke<ContextList>("remove_kubeconfig", { path });
+
+export const updateCluster = (name: string, prefs: ClusterPrefs) =>
+  invoke<ContextList>("update_cluster", { name, prefs });
 
 export const listNamespaces = (context: string) =>
   invoke<string[]>("list_namespaces", { context });
