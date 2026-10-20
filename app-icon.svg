@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    ClusterSmith app icon.
+    Three hex nuts joined into a triangle: Kubernetes nodes forming a cluster,
+    drawn as a smith's hardware. The amber spark is the forge.
+    Body follows the macOS icon grid: 824px squircle centred on a 1024px canvas.
+  -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2b38"/>
+      <stop offset="1" stop-color="#121218"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.55" r="0.5">
+      <stop offset="0" stop-color="#6c6edc" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#6c6edc" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="nut" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a4a8ff"/>
+      <stop offset="1" stop-color="#5d5fd3"/>
+    </linearGradient>
+    <linearGradient id="link" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8e92f7" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#5d5fd3" stop-opacity="0.7"/>
+    </linearGradient>
+    <radialGradient id="spark" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fff4d6"/>
+      <stop offset="0.45" stop-color="#ffbe55"/>
+      <stop offset="1" stop-color="#ff7a3d"/>
+    </radialGradient>
+    <radialGradient id="sparkGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffb24a" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffb24a" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Pointy-top hexagon, circumradius 100, rounded by its stroke join. -->
+    <polygon id="hex" points="0,-100 86.6,-50 86.6,50 0,100 -86.6,50 -86.6,-50"/>
+    <!-- Fine grain breaks up banding in the dark gradient. -->
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.05 0"/>
+    </filter>
+    <clipPath id="squircle">
+      <rect x="100" y="100" width="824" height="824" rx="185"/>
+    </clipPath>
+  </defs>
+
+  <!-- Soft shadow from stacked translucent shapes; a blur filter would band the body. -->
+  <g fill="#000">
+    <rect x="96" y="108" width="832" height="832" rx="189" opacity="0.10"/>
+    <rect x="98" y="104" width="828" height="828" rx="187" opacity="0.12"/>
+    <rect x="100" y="102" width="824" height="824" rx="185" opacity="0.16"/>
+  </g>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#body)"/>
+
+  <g clip-path="url(#squircle)">
+    <circle cx="512" cy="548" r="390" fill="url(#glow)"/>
+    <rect x="100" y="100" width="824" height="824" filter="url(#grain)"/>
+  </g>
+
+  <!-- Hairline highlight on the top edge, like a lit bevel. -->
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none"
+        stroke="#ffffff" stroke-opacity="0.09" stroke-width="3"/>
+
+  <!-- Links between the nodes sit under the nuts. -->
+  <path d="M512 376 L352 652 L672 652 Z" fill="none" stroke="url(#link)"
+        stroke-width="26" stroke-linejoin="round"/>
+
+  <g fill="url(#nut)" stroke="url(#nut)" stroke-width="28" stroke-linejoin="round">
+    <use href="#hex" transform="translate(512 376) scale(0.93)"/>
+    <use href="#hex" transform="translate(352 652) scale(0.93)"/>
+    <use href="#hex" transform="translate(672 652) scale(0.93)"/>
+  </g>
+
+  <!-- Bolt holes, cut back to the body color. -->
+  <g fill="#17171f">
+    <circle cx="512" cy="376" r="36"/>
+    <circle cx="352" cy="652" r="36"/>
+    <circle cx="672" cy="652" r="36"/>
+  </g>
+
+  <!-- The forge spark. -->
+  <circle cx="718" cy="300" r="110" fill="url(#sparkGlow)"/>
+  <path d="M718 228 C724 280 738 294 790 300 C738 306 724 320 718 372 C712 320 698 306 646 300 C698 294 712 280 718 228 Z"
+        fill="url(#spark)"/>
+</svg>
