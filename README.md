@@ -11,7 +11,13 @@
 ClusterSmith is a lightweight alternative to Lens for everyday cluster work.
 It is early and in development, and so far tested on macOS only.
 
-## Getting started
+## Install
+
+```bash
+brew install --cask twan-nguyen/tap/clustersmith
+```
+
+## Development
 
 You need Rust, Node.js and pnpm.
 

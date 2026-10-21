@@ -1,0 +1,145 @@
+name: Release
+
+# Push a tag such as v0.2.0 to build a universal macOS app, publish it as a GitHub release
+# and point the Homebrew cask in twan-nguyen/homebrew-tap at it.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    env:
+      APP_NAME: ClusterSmith
+      BUNDLE_ID: com.clustersmith.desktop
+      TAP_REPOSITORY: twan-nguyen/homebrew-tap
+      # GitHub's published SSH host key, so the tap push never trusts an unknown host.
+      GITHUB_SSH_HOST_KEY: github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Tag must look like v1.2.3"; exit 1; }
+          {
+            echo "VERSION=$VERSION"
+            echo "DIST=$RUNNER_TEMP/dist"
+            echo "APP_PATH=src-tauri/target/universal-apple-darwin/release/bundle/macos/$APP_NAME.app"
+          } >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          pnpm install --frozen-lockfile
+
+      - name: Build
+        run: |
+          # The version comes from the tag, so tauri.conf.json never needs bumping.
+          pnpm tauri build \
+            --target universal-apple-darwin \
+            --bundles app \
+            --config "{\"version\":\"$VERSION\"}"
+          test -d "$APP_PATH"
+          plutil -extract CFBundleShortVersionString raw "$APP_PATH/Contents/Info.plist"
+          lipo -archs "$APP_PATH"/Contents/MacOS/*
+          codesign --verify --strict "$APP_PATH"
+
+      - name: Package
+        run: |
+          mkdir -p "$DIST"
+          ZIP_NAME="$APP_NAME-$VERSION.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$DIST/$ZIP_NAME"
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          echo "SHA256=$(shasum -a 256 "$DIST/$ZIP_NAME" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$DIST/$ZIP_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$APP_NAME $VERSION" \
+            --generate-notes \
+            --verify-tag
+
+      - name: Update Homebrew cask
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          KEY_FILE="$RUNNER_TEMP/tap_deploy_key"
+          KNOWN_HOSTS="$RUNNER_TEMP/known_hosts"
+          printf '%s\n' "$TAP_DEPLOY_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          printf '%s\n' "$GITHUB_SSH_HOST_KEY" > "$KNOWN_HOSTS"
+          export GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS"
+
+          TAP_DIR="$RUNNER_TEMP/tap"
+          git clone "git@github.com:$TAP_REPOSITORY.git" "$TAP_DIR"
+          mkdir -p "$TAP_DIR/Casks"
+          cat > "$TAP_DIR/Casks/clustersmith.rb" <<CASK
+          cask "clustersmith" do
+            version "$VERSION"
+            sha256 "$SHA256"
+
+            url "https://github.com/$GITHUB_REPOSITORY/releases/download/v#{version}/$APP_NAME-#{version}.zip"
+            name "$APP_NAME"
+            desc "Desktop client for Kubernetes clusters"
+            homepage "https://github.com/$GITHUB_REPOSITORY"
+
+            livecheck do
+              url :url
+              strategy :github_latest
+            end
+
+            depends_on :macos
+
+            app "$APP_NAME.app"
+
+            # Ad-hoc signed and not notarized: clear the download quarantine so Gatekeeper lets it open.
+            postflight_steps do
+              run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/$APP_NAME.app"]
+            end
+
+            uninstall quit: "$BUNDLE_ID"
+
+            zap trash: [
+              "~/Library/Application Support/$BUNDLE_ID",
+              "~/Library/Caches/$BUNDLE_ID",
+              "~/Library/Saved Application State/$BUNDLE_ID.savedState",
+              "~/Library/WebKit/$BUNDLE_ID",
+            ]
+          end
+          CASK
+          cat "$TAP_DIR/Casks/clustersmith.rb"
+
+          cd "$TAP_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/clustersmith.rb
+          if git diff --cached --quiet; then
+            echo "Cask already at $VERSION"
+          else
+            git commit -m "clustersmith $VERSION"
+            git push origin HEAD:main
+          fi
+          rm -f "$KEY_FILE"
