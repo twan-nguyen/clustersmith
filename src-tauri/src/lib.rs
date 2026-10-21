@@ -58,6 +58,7 @@ pub fn run() {
             sessions::close_session,
             forwards::list_forward_ports,
             forwards::start_port_forward,
+            forwards::suggest_local_port,
             forwards::stop_port_forward,
             forwards::list_port_forwards,
         ])

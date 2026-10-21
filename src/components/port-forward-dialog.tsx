@@ -1,6 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowRight, Check, Copy, ExternalLink } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +18,7 @@ import {
   forwardUrl,
   listForwardPorts,
   startPortForward,
+  suggestLocalPort,
 } from "@/lib/kube";
 import { cn, errorMessage } from "@/lib/utils";
 
@@ -32,8 +33,8 @@ function parsePort(value: string) {
 
 /**
  * Starts a port forward to a pod or service. Ports the object declares are
- * offered as chips; any other port can be typed. Once running, the dialog
- * shows the local address, since an automatic port is only known then.
+ * offered as chips; any other port can be typed. The local port follows the
+ * chosen one (the same number when free) until the user types their own.
  */
 export function PortForwardDialog({
   open,
@@ -47,30 +48,55 @@ export function PortForwardDialog({
   const [choices, setChoices] = useState<PortChoice[] | null>(null);
   const [port, setPort] = useState("");
   const [localPort, setLocalPort] = useState("");
+  /** The user typed a local port, so it no longer follows the chosen one. */
+  const [localEdited, setLocalEdited] = useState(false);
+  const suggestion = useRef(0);
   const [openBrowser, setOpenBrowser] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [started, setStarted] = useState<PortForward | null>(null);
   const ids = { port: useId(), local: useId(), browser: useId() };
 
-  function reset() {
+  // Each opening starts fresh with the object's current ports. Radix does not
+  // call `onOpenChange` when `open` changes from outside, so this is an effect.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
     setChoices(null);
     setPort("");
     setLocalPort("");
+    setLocalEdited(false);
     setError(null);
     setStarted(null);
     listForwardPorts(object)
       .then((choices) => {
+        if (cancelled) return;
         setChoices(choices);
         if (choices.length > 0) setPort(String(choices[0].port));
       })
       .catch((err) => {
+        if (cancelled) return;
         setChoices([]);
         setError(errorMessage(err));
       });
-  }
+    return () => {
+      cancelled = true;
+    };
+    // The object is rebuilt on every render of the row; what it names is stable.
+  }, [open]);
 
   const remote = parsePort(port);
+
+  useEffect(() => {
+    if (!open || localEdited) return;
+    // Only the answer for the latest port counts; typing asks several times.
+    const request = ++suggestion.current;
+    if (remote === null) return setLocalPort("");
+    suggestLocalPort(remote)
+      .then((free) => request === suggestion.current && setLocalPort(free ? String(free) : ""))
+      .catch(() => {});
+  }, [open, remote, localEdited]);
+
   const local = localPort === "" ? null : parsePort(localPort);
   const valid = remote !== null && (localPort === "" || local !== null);
 
@@ -96,10 +122,7 @@ export function PortForwardDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={(o) => {
-        if (o) reset();
-        else onClose();
-      }}
+      onOpenChange={(o) => !o && onClose()}
     >
       <DialogContent className="sm:max-w-sm">
         {started ? (
@@ -171,7 +194,11 @@ export function PortForwardDialog({
                 max={65535}
                 placeholder="Any free port"
                 value={localPort}
-                onChange={(e) => setLocalPort(e.target.value)}
+                onChange={(e) => {
+                  setLocalPort(e.target.value);
+                  // Clearing the field hands it back to the suggestion.
+                  setLocalEdited(e.target.value !== "");
+                }}
                 className={INPUT}
               />
             </div>

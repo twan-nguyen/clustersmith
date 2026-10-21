@@ -232,3 +232,7 @@ export const onPortForwardsChanged = (handler: (forwards: PortForward[]) => void
   listen<PortForward[]>("port-forwards-changed", (event) => handler(event.payload));
 
 export const forwardUrl = (forward: PortForward) => `http://localhost:${forward.localPort}`;
+
+/** The same number as `port` when it is free locally, otherwise any free port. */
+export const suggestLocalPort = (port: number) =>
+  invoke<number | null>("suggest_local_port", { port });

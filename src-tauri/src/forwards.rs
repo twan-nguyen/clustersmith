@@ -217,6 +217,20 @@ pub async fn start_port_forward(
     Ok(info)
 }
 
+/// The local port to offer for `port`: the same number when it is free on
+/// this Mac, so addresses stay familiar, otherwise any free port.
+#[tauri::command]
+pub async fn suggest_local_port(port: u16) -> Option<u16> {
+    for candidate in [port, 0] {
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", candidate)).await
+            && let Ok(addr) = listener.local_addr()
+        {
+            return Some(addr.port());
+        }
+    }
+    None
+}
+
 #[tauri::command]
 pub fn stop_port_forward(id: u64, app: AppHandle, forwards: State<'_, Forwards>) {
     if let Some(forward) = forwards.running.lock().unwrap().remove(&id) {
@@ -456,6 +470,17 @@ mod tests {
             Ok(8080)
         );
         assert!(pod_port(&pod, &IntOrString::String("grpc".into())).is_err());
+    }
+
+    #[tokio::test]
+    async fn suggestion_avoids_a_taken_port() {
+        let taken = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = taken.local_addr().unwrap().port();
+        let suggested = suggest_local_port(port).await.unwrap();
+        assert_ne!(suggested, port);
+
+        drop(taken);
+        assert_eq!(suggest_local_port(port).await, Some(port));
     }
 
     #[test]
