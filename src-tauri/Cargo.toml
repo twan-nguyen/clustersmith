@@ -3,6 +3,8 @@ name = "clustersmith"
 version = "0.1.0"
 description = "A fast, focused Kubernetes desktop client"
 authors = ["Twan"]
+license = "MIT"
+repository = "https://github.com/twan-nguyen/clustersmith"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
