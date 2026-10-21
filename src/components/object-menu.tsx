@@ -1,5 +1,5 @@
 import { Cable, Ellipsis, FileCode, RotateCw, Scaling, Trash2 } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { PortForwardDialog } from "@/components/port-forward-dialog";
 import { Button } from "@/components/ui/button";
@@ -212,15 +212,18 @@ function ScaleDialog({
   const [value, setValue] = useState(String(initial));
   const inputId = useId();
   const replicas = Number(value);
+
+  // Radix does not call `onOpenChange` when `open` changes from outside.
+  useEffect(() => {
+    if (open) setValue(String(initial));
+    // Only on opening: later list updates must not overwrite what is typed.
+  }, [open]);
   const valid = value !== "" && Number.isInteger(replicas) && replicas >= 0;
 
   return (
     <Dialog
       open={open}
-      onOpenChange={(o) => {
-        if (o) setValue(String(initial));
-        else close();
-      }}
+      onOpenChange={(o) => !o && close()}
     >
       <DialogContent className="sm:max-w-sm">
         <form
