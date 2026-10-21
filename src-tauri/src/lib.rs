@@ -8,6 +8,7 @@ mod custom;
 mod details;
 mod forwards;
 mod kubeconfig;
+mod login_path;
 mod logs;
 mod metrics;
 mod nodes;
@@ -19,6 +20,7 @@ mod watch;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    login_path::adopt();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
