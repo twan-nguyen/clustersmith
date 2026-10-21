@@ -6,7 +6,7 @@ import { useEffect, useRef } from "react";
 
 import { closeSession, openShell, shellInput, shellResize } from "@/lib/kube";
 import { errorMessage } from "@/lib/utils";
-import type { DockTab } from "@/store";
+import type { PodTab } from "@/store";
 
 /** The panel's colors in hex, since xterm does not read OKLCH. */
 const THEME = {
@@ -22,7 +22,7 @@ function fitIfVisible(fit: FitAddon, el: HTMLElement | null) {
   if (el && el.offsetWidth > 0 && el.offsetHeight > 0) fit.fit();
 }
 
-export function ShellView({ tab, active }: { tab: DockTab; active: boolean }) {
+export function ShellView({ tab, active }: { tab: PodTab; active: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const terminal = useRef<{ term: Terminal; fit: FitAddon } | null>(null);
 

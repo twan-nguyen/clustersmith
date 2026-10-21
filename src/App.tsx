@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { CommandPalette } from "@/components/command-palette";
 import { Dock } from "@/components/dock";
 import { PodsView } from "@/components/pods-view";
+import { ResourceView } from "@/components/resource-view";
 import { SettingsView } from "@/components/settings-view";
 import { Sidebar } from "@/components/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -12,6 +13,7 @@ function App() {
   const init = useStore((s) => s.init);
   const view = useStore((s) => s.view);
   const transparency = useStore((s) => s.transparency);
+  const kind = useStore((s) => s.kinds.find((k) => k.id === s.kind));
 
   useEffect(() => {
     init();
@@ -35,8 +37,8 @@ function App() {
         event.key === "Escape" &&
         view === "settings" &&
         !paletteOpen &&
-        // Esc belongs to programs running in a dock shell, such as vim.
-        !(event.target instanceof Element && event.target.closest(".xterm"))
+        // Esc belongs to the dock's shells (vim) and editors (closing completions).
+        !(event.target instanceof Element && event.target.closest(".xterm, .cm-editor"))
       ) {
         setView("pods");
       }
@@ -51,7 +53,14 @@ function App() {
       <div data-tauri-drag-region className="app-canvas flex h-screen py-2 pr-2">
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col gap-2">
-          {view === "settings" ? <SettingsView /> : <PodsView />}
+          {view === "settings" ? (
+            <SettingsView />
+          ) : kind && kind.id !== "pods" ? (
+            // Keyed so sorting and scroll start fresh for each kind.
+            <ResourceView key={kind.id} kind={kind} />
+          ) : (
+            <PodsView />
+          )}
           <Dock />
         </div>
       </div>

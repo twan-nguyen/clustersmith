@@ -552,9 +552,11 @@ name = "clustersmith"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "jiff",
  "k8s-openapi",
  "kube",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "tauri",
  "tauri-build",

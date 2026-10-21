@@ -1,13 +1,16 @@
 use tauri::Manager;
 
+mod actions;
 mod appearance;
 mod clients;
 mod contexts;
 mod kubeconfig;
 mod logs;
 mod pods;
+mod resources;
 mod sessions;
 mod shell;
+mod watch;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -27,7 +30,7 @@ pub fn run() {
             Ok(())
         })
         .manage(clients::Clients::default())
-        .manage(pods::PodWatch::default())
+        .manage(watch::ViewWatch::default())
         .manage(sessions::Sessions::default())
         .invoke_handler(tauri::generate_handler![
             contexts::list_contexts,
@@ -38,7 +41,14 @@ pub fn run() {
             appearance::get_transparency,
             appearance::set_transparency,
             pods::watch_pods,
-            pods::stop_pod_watch,
+            resources::list_resource_kinds,
+            resources::watch_resources,
+            actions::delete_resource,
+            actions::restart_workload,
+            actions::scale_workload,
+            actions::get_resource_yaml,
+            actions::apply_resource_yaml,
+            watch::stop_watch,
             logs::open_logs,
             shell::open_shell,
             shell::shell_input,

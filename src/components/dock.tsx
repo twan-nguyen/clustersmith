@@ -1,13 +1,16 @@
-import { ChevronDown, ChevronUp, ScrollText, SquareTerminal, X } from "lucide-react";
+import { ChevronDown, ChevronUp, FileCode, ScrollText, SquareTerminal, X } from "lucide-react";
 import { Suspense, lazy, useState } from "react";
 
 import { LogsView } from "@/components/logs-view";
 import { cn } from "@/lib/utils";
 import { type DockTab, useStore } from "@/store";
 
-// xterm.js is most of the bundle; load it with the first shell, not at startup.
+// xterm.js and CodeMirror are most of the bundle; load each with its first tab.
 const ShellView = lazy(() =>
   import("@/components/shell-view").then((m) => ({ default: m.ShellView })),
+);
+const YamlView = lazy(() =>
+  import("@/components/yaml-view").then((m) => ({ default: m.YamlView })),
 );
 
 const TAB_BAR_HEIGHT = 36;
@@ -15,7 +18,7 @@ const MIN_HEIGHT = 160;
 const DEFAULT_HEIGHT = 320;
 
 /**
- * Log streams and shells, docked under the main panel like Lens's dock.
+ * Log streams, shells and YAML editors, docked under the main panel like Lens's dock.
  * It lives outside the views, so a shell survives a trip to Settings.
  */
 export function Dock() {
@@ -97,13 +100,15 @@ export function Dock() {
               role="tabpanel"
               className={cn("absolute inset-0", !active && "invisible")}
             >
-              {tab.kind === "logs" ? (
-                <LogsView tab={tab} active={active && !dockCollapsed} />
-              ) : (
-                <Suspense>
+              <Suspense>
+                {tab.kind === "yaml" ? (
+                  <YamlView tab={tab} active={active && !dockCollapsed} />
+                ) : tab.kind === "logs" ? (
+                  <LogsView tab={tab} active={active && !dockCollapsed} />
+                ) : (
                   <ShellView tab={tab} active={active && !dockCollapsed} />
-                </Suspense>
-              )}
+                )}
+              </Suspense>
             </div>
           );
         })}
@@ -123,14 +128,13 @@ function TabButton({
   onSelect: () => void;
   onClose: () => void;
 }) {
-  const Icon = tab.kind === "logs" ? ScrollText : SquareTerminal;
-  const where = [tab.context, tab.namespace, tab.pod, tab.container].filter(Boolean).join(" / ");
+  const { Icon, kindLabel, name, detail, where } = describe(tab);
   return (
     <div
       role="tab"
       aria-selected={active}
       tabIndex={0}
-      title={`${tab.kind === "logs" ? "Logs" : "Shell"} · ${where}`}
+      title={`${kindLabel} · ${where}`}
       onClick={onSelect}
       onKeyDown={(e) => e.key === "Enter" && onSelect()}
       // Middle click closes, as in browsers and Lens.
@@ -141,14 +145,14 @@ function TabButton({
       )}
     >
       <Icon className="size-3.5 shrink-0" />
-      <span className="truncate">{tab.pod}</span>
-      {tab.container && <span className="shrink-0 text-muted-foreground">· {tab.container}</span>}
+      <span className="truncate">{name}</span>
+      {detail && <span className="shrink-0 text-muted-foreground">· {detail}</span>}
       <button
         onClick={(e) => {
           e.stopPropagation();
           onClose();
         }}
-        aria-label={`Close ${tab.pod}`}
+        aria-label={`Close ${name}`}
         className={cn(
           "flex size-4 shrink-0 items-center justify-center rounded opacity-0 transition-opacity duration-100 group-hover:opacity-100 hover:bg-foreground/10 focus-visible:opacity-100",
           active && "opacity-100",
@@ -158,4 +162,24 @@ function TabButton({
       </button>
     </div>
   );
+}
+
+/** How a tab names itself in the tab bar and its tooltip. */
+function describe(tab: DockTab) {
+  if (tab.kind === "yaml") {
+    return {
+      Icon: FileCode,
+      kindLabel: "YAML",
+      name: tab.name,
+      detail: tab.resource,
+      where: [tab.context, tab.resource, tab.namespace, tab.name].filter(Boolean).join(" / "),
+    };
+  }
+  return {
+    Icon: tab.kind === "logs" ? ScrollText : SquareTerminal,
+    kindLabel: tab.kind === "logs" ? "Logs" : "Shell",
+    name: tab.pod,
+    detail: tab.container,
+    where: [tab.context, tab.namespace, tab.pod, tab.container].filter(Boolean).join(" / "),
+  };
 }

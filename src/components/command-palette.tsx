@@ -11,6 +11,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command";
+import { KindIcon } from "@/components/kind-icon";
 import { contextLabel } from "@/lib/kube";
 import { useStore } from "@/store";
 
@@ -28,6 +29,8 @@ export function CommandPalette() {
     selectNamespace,
     setQuery,
     setView,
+    kinds,
+    selectKind,
   } = useStore();
   const [search, setSearch] = useState("");
 
@@ -79,6 +82,22 @@ export function CommandPalette() {
               </CommandItem>
             </CommandGroup>
           )}
+
+          <CommandGroup heading="Go to">
+            {kinds
+              .filter((k) => matches(k.label))
+              .map((k) => (
+                <CommandItem
+                  key={k.id}
+                  value={`kind:${k.id}`}
+                  onSelect={() => run(() => selectKind(k.id))}
+                >
+                  <KindIcon kind={k.id} />
+                  {k.label}
+                  <span className="ml-auto text-xs text-muted-foreground">{k.section}</span>
+                </CommandItem>
+              ))}
+          </CommandGroup>
 
           <CommandGroup heading="Contexts">
             {contexts

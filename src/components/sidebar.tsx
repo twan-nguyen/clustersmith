@@ -1,6 +1,5 @@
 import {
   ArrowLeft,
-  Box,
   Check,
   ChevronDown,
   ChevronsUpDown,
@@ -10,10 +9,11 @@ import {
   Server,
   Settings,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import appIcon from "../../app-icon.svg";
 import { ContextAvatar } from "@/components/context-avatar";
+import { KindIcon } from "@/components/kind-icon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,7 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { contextLabel } from "@/lib/kube";
+import { type ResourceKind, contextLabel } from "@/lib/kube";
 import { type SettingsPage, useStore } from "@/store";
 
 export function Sidebar() {
@@ -42,7 +42,13 @@ export function Sidebar() {
 }
 
 function AppNav() {
-  const setPaletteOpen = useStore((s) => s.setPaletteOpen);
+  const { setPaletteOpen, kinds, kind, selectKind } = useStore();
+  // Kinds arrive in sidebar order; group them by section, keeping that order.
+  const sections = useMemo(() => {
+    const groups = new Map<string, ResourceKind[]>();
+    for (const k of kinds) groups.set(k.section, [...(groups.get(k.section) ?? []), k]);
+    return [...groups];
+  }, [kinds]);
 
   return (
     <>
@@ -61,9 +67,19 @@ function AppNav() {
       </div>
 
       <nav className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3">
-        <Section title="Workloads">
-          <NavItem icon={<Box />} label="Pods" active />
-        </Section>
+        {sections.map(([section, kinds]) => (
+          <Section key={section} title={section}>
+            {kinds.map((k) => (
+              <NavItem
+                key={k.id}
+                icon={<KindIcon kind={k.id} />}
+                label={k.label}
+                active={k.id === kind}
+                onClick={() => k.id !== kind && selectKind(k.id)}
+              />
+            ))}
+          </Section>
+        ))}
       </nav>
 
       <div className="border-t border-sidebar-border px-3 py-2">

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { closeSession, openLogs } from "@/lib/kube";
 import { cn, errorMessage } from "@/lib/utils";
-import type { DockTab } from "@/store";
+import type { PodTab } from "@/store";
 
 /** Oldest lines are dropped past this, so a long session stays light. */
 const MAX_LINES = 20_000;
@@ -16,10 +16,11 @@ const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 type Status =
   | { kind: "connecting" }
   | { kind: "live" }
+  | { kind: "reconnecting" }
   | { kind: "ended" }
   | { kind: "error"; message: string };
 
-export function LogsView({ tab, active }: { tab: DockTab; active: boolean }) {
+export function LogsView({ tab, active }: { tab: PodTab; active: boolean }) {
   const lines = useRef<string[]>([]);
   const [version, setVersion] = useState(0);
   const [status, setStatus] = useState<Status>({ kind: "connecting" });
@@ -36,10 +37,8 @@ export function LogsView({ tab, active }: { tab: DockTab; active: boolean }) {
         for (const line of event.lines) buffer.push(line.replace(ANSI, ""));
         if (buffer.length > MAX_LINES) buffer.splice(0, buffer.length - MAX_LINES);
         setVersion((v) => v + 1);
-      } else if (event.type === "ended") {
-        setStatus({ kind: "ended" });
       } else {
-        setStatus({ kind: "error", message: event.message });
+        setStatus({ kind: event.type });
       }
     })
       .then((sessionId) => {
@@ -147,14 +146,22 @@ function StatusLabel({ status }: { status: Status }) {
       </span>
     );
   }
-  const label = { connecting: "Connecting…", live: "Live", ended: "Ended" }[status.kind];
+  const label = {
+    connecting: "Connecting…",
+    live: "Live",
+    reconnecting: "Reconnecting…",
+    ended: "Ended",
+  }[status.kind];
   return (
     <span className="flex items-center gap-1.5 text-muted-foreground">
       <span
         className={cn(
           "size-1.5 rounded-full",
-          status.kind === "live" ? "bg-success" : "bg-muted-foreground/60",
-          status.kind === "connecting" && "animate-pulse motion-reduce:animate-none",
+          status.kind === "live" && "bg-success",
+          status.kind === "reconnecting" && "bg-warning",
+          (status.kind === "connecting" || status.kind === "ended") && "bg-muted-foreground/60",
+          (status.kind === "connecting" || status.kind === "reconnecting") &&
+            "animate-pulse motion-reduce:animate-none",
         )}
       />
       {label}

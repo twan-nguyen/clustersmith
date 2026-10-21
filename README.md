@@ -30,8 +30,10 @@ App Store does not accept; distribute outside the store.
 - `src-tauri/src/kubeconfig.rs`: settings file, kubeconfig sources, cluster names and colors
 - `src-tauri/src/clients.rs`: one cached API client per kubeconfig context
 - `src-tauri/src/contexts.rs`: kubeconfig contexts and namespaces
-- `src-tauri/src/pods.rs`: pod watch, batched every 150 ms
+- `src-tauri/src/watch.rs`: live list watch shared by every kind, batched every 150 ms
+- `src-tauri/src/pods.rs`, `resources.rs`: pods, and the other kinds with their columns
+- `src-tauri/src/actions.rs`: delete, restart, scale, and YAML edit
 - `src-tauri/src/logs.rs`, `shell.rs`, `sessions.rs`: log streams and `exec` shells in the dock
 - `src-tauri/src/appearance.rs`: window translucency
-- `src/store.ts`: UI state, the live pod subscription and dock tabs
-- `src/components/`: sidebar, pods table, dock, Settings (`⌘,`), command palette (`⌘K`)
+- `src/store.ts`: UI state, the live list subscription and dock tabs
+- `src/components/`: sidebar, resource lists, dock, Settings (`⌘,`), command palette (`⌘K`)

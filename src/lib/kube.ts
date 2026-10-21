@@ -44,10 +44,56 @@ export type PodRow = {
   node: string | null;
 };
 
-export type PodEvent =
-  | { type: "snapshot"; pods: PodRow[] }
+/** What a list watch sends: the whole sorted list, or a connection change. */
+export type WatchEvent<T> =
+  | { type: "snapshot"; items: T[] }
   | { type: "error"; message: string }
   | { type: "recovered" };
+
+export type ResourceColumn = {
+  label: string;
+  /** The cell is an RFC 3339 time, shown as an age. */
+  time: boolean;
+};
+
+/** A kind the sidebar lists, as described by the Rust side. */
+export type ResourceKind = {
+  id: string;
+  label: string;
+  /** The API kind, such as "Deployment". */
+  singular: string;
+  section: string;
+  namespaced: boolean;
+  columns: ResourceColumn[];
+  ageLabel: string;
+  restartable: boolean;
+  scalable: boolean;
+};
+
+export type ResourceRow = {
+  uid: string;
+  name: string;
+  namespace: string | null;
+  /** One per `ResourceKind.columns` entry. */
+  cells: string[];
+  tone: "ok" | "done" | "pending" | "failed" | null;
+  age: string | null;
+};
+
+/** One object, addressed by its kind's id (the API plural, e.g. "deployments"). */
+export type ObjectRef = {
+  context: string;
+  resource: string;
+  namespace: string | null;
+  name: string;
+};
+
+const objectArgs = ({ context, resource, namespace, name }: ObjectRef) => ({
+  context,
+  kind: resource,
+  namespace,
+  name,
+});
 
 export const listContexts = () => invoke<ContextList>("list_contexts");
 
@@ -66,19 +112,48 @@ export const listNamespaces = (context: string) =>
 export function watchPods(
   context: string,
   namespace: string | null,
-  onEvent: (event: PodEvent) => void,
+  onEvent: (event: WatchEvent<PodRow>) => void,
 ) {
-  const channel = new Channel<PodEvent>();
+  const channel = new Channel<WatchEvent<PodRow>>();
   channel.onmessage = onEvent;
   return invoke<void>("watch_pods", { context, namespace, onEvent: channel });
 }
 
-export const stopPodWatch = () => invoke<void>("stop_pod_watch");
+export const listResourceKinds = () => invoke<ResourceKind[]>("list_resource_kinds");
+
+export function watchResources(
+  context: string,
+  kind: string,
+  namespace: string | null,
+  onEvent: (event: WatchEvent<ResourceRow>) => void,
+) {
+  const channel = new Channel<WatchEvent<ResourceRow>>();
+  channel.onmessage = onEvent;
+  return invoke<void>("watch_resources", { context, kind, namespace, onEvent: channel });
+}
+
+export const stopWatch = () => invoke<void>("stop_watch");
+
+export const deleteResource = (ref: ObjectRef) => invoke<void>("delete_resource", objectArgs(ref));
+
+export const restartWorkload = (ref: ObjectRef) =>
+  invoke<void>("restart_workload", objectArgs(ref));
+
+export const scaleWorkload = (ref: ObjectRef, replicas: number) =>
+  invoke<void>("scale_workload", { ...objectArgs(ref), replicas });
+
+export const getResourceYaml = (ref: ObjectRef) =>
+  invoke<string>("get_resource_yaml", objectArgs(ref));
+
+/** Saves edited YAML; resolves to what the server stored. */
+export const applyResourceYaml = (ref: ObjectRef, yaml: string) =>
+  invoke<string>("apply_resource_yaml", { ...objectArgs(ref), yaml });
 
 export type LogEvent =
   | { type: "lines"; lines: string[] }
-  | { type: "ended" }
-  | { type: "error"; message: string };
+  | { type: "reconnecting" }
+  | { type: "live" }
+  | { type: "ended" };
 
 export type ShellEvent =
   | { type: "output"; data: string }

@@ -5,24 +5,35 @@ import {
   type ContextList,
   type KubeContext,
   type KubeconfigSource,
+  type ObjectRef,
   type PodRow,
   type PodTarget,
+  type ResourceKind,
+  type ResourceRow,
+  type WatchEvent,
   addKubeconfig,
   getTransparency,
   listContexts,
   listNamespaces,
+  listResourceKinds,
   removeKubeconfig,
   setTransparency,
-  stopPodWatch,
+  stopWatch,
   updateCluster,
   watchPods,
+  watchResources,
 } from "@/lib/kube";
 import { errorMessage } from "@/lib/utils";
 
 export type View = "pods" | "settings";
 export type SettingsPage = "clusters" | "kubeconfig" | "appearance";
 
-export type DockTab = PodTarget & { id: string; kind: "logs" | "shell" };
+export type DockTab =
+  | ({ id: string; kind: "logs" | "shell" } & PodTarget)
+  | ({ id: string; kind: "yaml" } & ObjectRef);
+export type PodTab = Extract<DockTab, { kind: "logs" | "shell" }>;
+export type YamlTab = Extract<DockTab, { kind: "yaml" }>;
+export type NewDockTab = Omit<PodTab, "id"> | Omit<YamlTab, "id">;
 
 type State = {
   contexts: KubeContext[];
@@ -31,8 +42,14 @@ type State = {
   namespaces: string[];
   /** `null` means every namespace. */
   namespace: string | null;
+  /** Kinds the sidebar lists, in order. */
+  kinds: ResourceKind[];
+  /** The kind on screen, by id; Pods have their own view. */
+  kind: string;
   pods: PodRow[];
-  podsLoaded: boolean;
+  resources: ResourceRow[];
+  /** The first snapshot of the current list arrived. */
+  loaded: boolean;
   query: string;
   error: string | null;
   paletteOpen: boolean;
@@ -49,12 +66,15 @@ type State = {
   removeKubeconfig: (path: string) => Promise<void>;
   updateCluster: (name: string, prefs: ClusterPrefs) => Promise<void>;
   selectContext: (name: string) => Promise<void>;
+  /** Reloads the namespace list of the current context. */
+  refreshNamespaces: () => Promise<void>;
   selectNamespace: (namespace: string | null) => void;
+  selectKind: (kind: string) => void;
   setQuery: (query: string) => void;
   setPaletteOpen: (open: boolean) => void;
   setView: (view: View) => void;
   setSettingsPage: (page: SettingsPage) => void;
-  openTab: (kind: DockTab["kind"], target: PodTarget) => void;
+  openTab: (tab: NewDockTab) => void;
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   setDockCollapsed: (collapsed: boolean) => void;
@@ -68,37 +88,52 @@ let watchId = 0;
 
 export const useStore = create<State>()((set, get) => {
   function startWatch() {
-    const { context, namespace } = get();
+    const { context, namespace, kind } = get();
     if (!context) return;
     const id = ++watchId;
-    set({ pods: [], podsLoaded: false, error: null });
-    watchPods(context, namespace, (event) => {
-      if (id !== watchId) return;
-      if (event.type === "snapshot") {
-        set({ pods: event.pods, podsLoaded: true, error: null });
-      } else if (event.type === "recovered") {
-        set({ error: null });
-      } else {
-        set({ error: event.message });
-      }
-    }).catch((error) => {
+    set({ pods: [], resources: [], loaded: false, error: null });
+
+    const handle =
+      <T>(show: (items: T[]) => void) =>
+      (event: WatchEvent<T>) => {
+        if (id !== watchId) return;
+        if (event.type === "snapshot") {
+          show(event.items);
+          set({ loaded: true, error: null });
+          // The cluster answers now; fill the namespace list if loading it failed.
+          if (get().namespaces.length === 0) get().refreshNamespaces().catch(() => {});
+        } else if (event.type === "recovered") {
+          set({ error: null });
+        } else {
+          set({ error: event.message });
+        }
+      };
+    const request =
+      kind === "pods"
+        ? watchPods(context, namespace, handle((pods: PodRow[]) => set({ pods })))
+        : watchResources(
+            context,
+            kind,
+            namespace,
+            handle((resources: ResourceRow[]) => set({ resources })),
+          );
+    request.catch((error) => {
       if (id === watchId) set({ error: errorMessage(error) });
     });
   }
 
-  /** Keeps the selected context if it still exists, otherwise falls back. */
-  async function applyContexts({ current, contexts, sources }: ContextList) {
+  /**
+   * Keeps the selected context if it still exists. Nothing connects on its
+   * own: a cluster may sit behind a VPN that is off, so the user picks one.
+   */
+  async function applyContexts({ contexts, sources }: ContextList) {
     set({ contexts, sources });
     const selected = get().context;
-    if (selected && contexts.some((c) => c.name === selected)) return;
-
-    const next = (current && contexts.some((c) => c.name === current) ? current : null)
-      ?? contexts[0]?.name;
-    if (next) return get().selectContext(next);
+    if (!selected || contexts.some((c) => c.name === selected)) return;
 
     watchId++;
-    set({ context: null, namespace: null, namespaces: [], pods: [], podsLoaded: false });
-    await stopPodWatch();
+    set({ context: null, namespace: null, namespaces: [], pods: [], resources: [], loaded: false });
+    await stopWatch();
   }
 
   return {
@@ -107,8 +142,11 @@ export const useStore = create<State>()((set, get) => {
     context: null,
     namespaces: [],
     namespace: null,
+    kinds: [],
+    kind: "pods",
     pods: [],
-    podsLoaded: false,
+    resources: [],
+    loaded: false,
     query: "",
     error: null,
     paletteOpen: false,
@@ -121,6 +159,7 @@ export const useStore = create<State>()((set, get) => {
 
     async init() {
       getTransparency().then((transparency) => set({ transparency }));
+      listResourceKinds().then((kinds) => set({ kinds }));
       try {
         await applyContexts(await listContexts());
       } catch (error) {
@@ -143,16 +182,25 @@ export const useStore = create<State>()((set, get) => {
     async selectContext(name) {
       set({ context: name, namespace: null, namespaces: [] });
       startWatch();
-      try {
-        const namespaces = await listNamespaces(name);
-        if (get().context === name) set({ namespaces });
-      } catch (error) {
-        if (get().context === name) set({ error: errorMessage(error) });
-      }
+      // A failure is not shown here: the list view reports an unreachable
+      // cluster, and the list is loaded again once it answers.
+      await get().refreshNamespaces().catch(() => {});
+    },
+
+    async refreshNamespaces() {
+      const { context } = get();
+      if (!context) return;
+      const namespaces = await listNamespaces(context);
+      if (get().context === context) set({ namespaces });
     },
 
     selectNamespace(namespace) {
       set({ namespace });
+      startWatch();
+    },
+
+    selectKind(kind) {
+      set({ kind, query: "", view: "pods" });
       startWatch();
     },
 
@@ -162,8 +210,8 @@ export const useStore = create<State>()((set, get) => {
     setSettingsPage: (settingsPage) => set({ settingsPage }),
 
     // Like Lens, every open is a new tab: two shells into one pod are both useful.
-    openTab(kind, target) {
-      const tab = { ...target, kind, id: crypto.randomUUID() };
+    openTab(newTab) {
+      const tab = { ...newTab, id: crypto.randomUUID() } as DockTab;
       set((s) => ({ dockTabs: [...s.dockTabs, tab], activeTab: tab.id, dockCollapsed: false }));
     },
 
