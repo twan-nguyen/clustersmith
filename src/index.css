@@ -156,6 +156,21 @@
   body {
     @apply bg-background text-foreground overflow-hidden select-none text-[13px];
   }
+  /* With vibrancy on, the macOS sidebar material shows through the canvas. */
+  html.vibrancy,
+  html.vibrancy body {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .app-canvas {
+    background: var(--sidebar);
+    transition: background-color 120ms var(--ease-out-quart);
+  }
+  html.vibrancy .app-canvas {
+    background: color-mix(in oklch, var(--sidebar) var(--canvas-opacity, 35%), transparent);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

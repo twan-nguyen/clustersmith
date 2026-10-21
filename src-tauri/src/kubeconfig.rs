@@ -25,12 +25,17 @@ struct Settings {
     kubeconfigs: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     clusters: BTreeMap<String, ClusterPrefs>,
+    /// How much of the macOS blur shows through the window background, in
+    /// percent; 0 turns the blur off.
+    #[serde(default)]
+    transparency: u8,
 }
 
 /// Where contexts come from: the files `kubectl` would read, plus files the
 /// user imported. Imported files are referenced by path, not copied, so tools
 /// that rewrite them (for example `aws eks update-kubeconfig`) stay in sync.
-/// The same settings file also keeps how each context is shown.
+/// The same settings file also keeps how each context is shown and the
+/// app's appearance.
 pub struct KubeconfigSources {
     settings_file: PathBuf,
     defaults: Vec<PathBuf>,
@@ -139,6 +144,16 @@ impl KubeconfigSources {
         } else {
             settings.clusters.insert(context.to_owned(), prefs);
         }
+        self.save(&settings)
+    }
+
+    pub fn transparency(&self) -> u8 {
+        self.settings.lock().unwrap().transparency
+    }
+
+    pub fn set_transparency(&self, percent: u8) -> Result<(), String> {
+        let mut settings = self.settings.lock().unwrap();
+        settings.transparency = percent.min(100);
         self.save(&settings)
     }
 

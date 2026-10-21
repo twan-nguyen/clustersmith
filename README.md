@@ -22,11 +22,16 @@ pnpm tauri dev
 
 Build a release bundle with `pnpm tauri build`.
 
+The window uses `macOSPrivateApi` for its translucent background, which the Mac
+App Store does not accept; distribute outside the store.
+
 ## Layout
 
-- `src-tauri/src/kubeconfig.rs`: kubeconfig files, default ones plus those added in Settings
+- `src-tauri/src/kubeconfig.rs`: settings file, kubeconfig sources, cluster names and colors
 - `src-tauri/src/clients.rs`: one cached API client per kubeconfig context
 - `src-tauri/src/contexts.rs`: kubeconfig contexts and namespaces
 - `src-tauri/src/pods.rs`: pod watch, batched every 150 ms
-- `src/store.ts`: UI state and the live pod subscription
-- `src/components/`: sidebar, pods table, Settings (`⌘,`), command palette (`⌘K`)
+- `src-tauri/src/logs.rs`, `shell.rs`, `sessions.rs`: log streams and `exec` shells in the dock
+- `src-tauri/src/appearance.rs`: window translucency
+- `src/store.ts`: UI state, the live pod subscription and dock tabs
+- `src/components/`: sidebar, pods table, dock, Settings (`⌘,`), command palette (`⌘K`)

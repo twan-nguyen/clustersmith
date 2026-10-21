@@ -50,6 +50,7 @@ pub struct PodRow {
     status: String,
     ready: u32,
     containers: u32,
+    container_names: Vec<String>,
     restarts: i32,
     created_at: Option<Time>,
     node: Option<String>,
@@ -179,6 +180,11 @@ fn pod_row(pod: &Pod) -> PodRow {
         status: pod_status(pod),
         ready: statuses.iter().filter(|c| c.ready).count() as u32,
         containers: pod.spec.as_ref().map_or(0, |s| s.containers.len() as u32),
+        container_names: pod
+            .spec
+            .iter()
+            .flat_map(|s| s.containers.iter().map(|c| c.name.clone()))
+            .collect(),
         restarts: statuses.iter().map(|c| c.restart_count).sum(),
         created_at: pod.metadata.creation_timestamp.clone(),
         node: pod.spec.as_ref().and_then(|s| s.node_name.clone()),

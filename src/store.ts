@@ -6,10 +6,13 @@ import {
   type KubeContext,
   type KubeconfigSource,
   type PodRow,
+  type PodTarget,
   addKubeconfig,
+  getTransparency,
   listContexts,
   listNamespaces,
   removeKubeconfig,
+  setTransparency,
   stopPodWatch,
   updateCluster,
   watchPods,
@@ -17,7 +20,9 @@ import {
 import { errorMessage } from "@/lib/utils";
 
 export type View = "pods" | "settings";
-export type SettingsPage = "clusters" | "kubeconfig";
+export type SettingsPage = "clusters" | "kubeconfig" | "appearance";
+
+export type DockTab = PodTarget & { id: string; kind: "logs" | "shell" };
 
 type State = {
   contexts: KubeContext[];
@@ -33,6 +38,11 @@ type State = {
   paletteOpen: boolean;
   view: View;
   settingsPage: SettingsPage;
+  dockTabs: DockTab[];
+  activeTab: string | null;
+  dockCollapsed: boolean;
+  /** How much of the macOS blur shows through the background, 0–100. */
+  transparency: number;
 
   init: () => Promise<void>;
   addKubeconfig: (path: string) => Promise<void>;
@@ -44,6 +54,13 @@ type State = {
   setPaletteOpen: (open: boolean) => void;
   setView: (view: View) => void;
   setSettingsPage: (page: SettingsPage) => void;
+  openTab: (kind: DockTab["kind"], target: PodTarget) => void;
+  closeTab: (id: string) => void;
+  setActiveTab: (id: string) => void;
+  setDockCollapsed: (collapsed: boolean) => void;
+  /** Updates the look while dragging; saves only when the blur turns on or off. */
+  previewTransparency: (percent: number) => Promise<void>;
+  setTransparency: (percent: number) => Promise<void>;
 };
 
 // Each watch gets a number; events from a replaced watch are dropped.
@@ -97,8 +114,13 @@ export const useStore = create<State>()((set, get) => {
     paletteOpen: false,
     view: "pods",
     settingsPage: "clusters",
+    dockTabs: [],
+    activeTab: null,
+    dockCollapsed: false,
+    transparency: 0,
 
     async init() {
+      getTransparency().then((transparency) => set({ transparency }));
       try {
         await applyContexts(await listContexts());
       } catch (error) {
@@ -138,5 +160,36 @@ export const useStore = create<State>()((set, get) => {
     setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
     setView: (view) => set({ view }),
     setSettingsPage: (settingsPage) => set({ settingsPage }),
+
+    // Like Lens, every open is a new tab: two shells into one pod are both useful.
+    openTab(kind, target) {
+      const tab = { ...target, kind, id: crypto.randomUUID() };
+      set((s) => ({ dockTabs: [...s.dockTabs, tab], activeTab: tab.id, dockCollapsed: false }));
+    },
+
+    closeTab(id) {
+      set((s) => {
+        const index = s.dockTabs.findIndex((t) => t.id === id);
+        const dockTabs = s.dockTabs.filter((t) => t.id !== id);
+        const neighbor = dockTabs[Math.min(index, dockTabs.length - 1)];
+        const activeTab = s.activeTab === id ? (neighbor?.id ?? null) : s.activeTab;
+        return { dockTabs, activeTab };
+      });
+    },
+
+    setActiveTab: (activeTab) => set({ activeTab, dockCollapsed: false }),
+    setDockCollapsed: (dockCollapsed) => set({ dockCollapsed }),
+
+    async previewTransparency(percent) {
+      const blurChanged = percent > 0 !== get().transparency > 0;
+      set({ transparency: percent });
+      // The blur itself lives in the native window, so crossing 0 needs Rust.
+      if (blurChanged) await setTransparency(percent);
+    },
+
+    async setTransparency(percent) {
+      set({ transparency: percent });
+      await setTransparency(percent);
+    },
   };
 });

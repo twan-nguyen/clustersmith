@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronsUpDown,
   FileText,
+  Paintbrush,
   Search,
   Server,
   Settings,
@@ -48,9 +49,10 @@ function AppNav() {
       <div className="flex items-center gap-1 px-3 pb-3">
         <div className="flex min-w-0 flex-1 items-center gap-2 px-1.5">
           {/* The icon art leaves macOS grid padding, so it renders a bit larger. */}
-          <img src={appIcon} alt="" className="-m-0.5 size-6 shrink-0" />
-          <span className="truncate text-sm font-semibold text-sidebar-accent-foreground">
-            ClusterSmith
+          <img src={appIcon} alt="" className="-my-1.5 -ml-1 size-8 shrink-0" />
+          {/* Wordmark: the app's own word stays bright, the shared brand recedes. */}
+          <span className="truncate text-[15px] font-semibold tracking-tight text-sidebar-accent-foreground">
+            Cluster<span className="font-medium text-sidebar-accent-foreground/35">Smith</span>
           </span>
         </div>
         <IconButton label="Search (⌘K)" onClick={() => setPaletteOpen(true)}>
@@ -125,6 +127,7 @@ function ClusterSwitcher() {
 const SETTINGS_PAGES: { page: SettingsPage; label: string; icon: React.ReactNode }[] = [
   { page: "clusters", label: "Clusters", icon: <Server /> },
   { page: "kubeconfig", label: "Kubeconfig files", icon: <FileText /> },
+  { page: "appearance", label: "Appearance", icon: <Paintbrush /> },
 ];
 
 function SettingsNav() {

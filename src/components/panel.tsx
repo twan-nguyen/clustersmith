@@ -8,7 +8,7 @@ export function Panel({ className, children, ...props }: React.ComponentProps<"m
   return (
     <main
       className={cn(
-        "flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-[0_1px_3px_oklch(0_0_0/30%)]",
+        "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-[0_1px_3px_oklch(0_0_0/30%)]",
         className,
       )}
       {...props}

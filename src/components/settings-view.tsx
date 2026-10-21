@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { FileText, Plus, Settings, X } from "lucide-react";
 import { useState } from "react";
 
+import { AppearanceSettings } from "@/components/appearance-settings";
 import { ClusterSettings } from "@/components/cluster-settings";
 import { Panel, PanelHeader } from "@/components/panel";
 import { SettingsHeading } from "@/components/settings-heading";
@@ -14,6 +15,13 @@ import { type SettingsPage, useStore } from "@/store";
 const TITLES: Record<SettingsPage, string> = {
   clusters: "Clusters",
   kubeconfig: "Kubeconfig files",
+  appearance: "Appearance",
+};
+
+const PAGES: Record<SettingsPage, () => React.ReactNode> = {
+  clusters: () => <ClusterSettings />,
+  kubeconfig: () => <KubeconfigSettings />,
+  appearance: () => <AppearanceSettings />,
 };
 
 export function SettingsView() {
@@ -33,7 +41,7 @@ export function SettingsView() {
           key={page}
           className="mx-auto flex max-w-2xl animate-view-in flex-col gap-6 px-8 py-12"
         >
-          {page === "clusters" ? <ClusterSettings /> : <KubeconfigSettings />}
+          {PAGES[page]()}
         </section>
       </div>
     </Panel>

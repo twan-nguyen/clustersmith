@@ -1,19 +1,26 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowUp, Box, Search } from "lucide-react";
+import { ArrowUp, Box, ScrollText, Search, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { NamespaceFilter } from "@/components/namespace-filter";
 import { Panel, PanelHeader } from "@/components/panel";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { PodRow } from "@/lib/kube";
 import { type StatusTone, formatAge, statusTone, useNow } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useStore } from "@/store";
+import { type DockTab, useStore } from "@/store";
 
 type SortKey = "name" | "namespace" | "status" | "restarts" | "age";
 
 const COLUMNS =
-  "grid grid-cols-[minmax(220px,2fr)_minmax(120px,1fr)_150px_56px_72px_56px_minmax(110px,1fr)] items-center gap-4 px-5";
+  "grid grid-cols-[minmax(220px,2fr)_minmax(120px,1fr)_150px_56px_72px_56px_minmax(110px,1fr)_56px] items-center gap-4 px-5";
 
 const ROW_HEIGHT = 36;
 
@@ -145,6 +152,7 @@ export function PodsView() {
               <SortHeader label="Restarts" column="restarts" sort={sort} onSort={toggleSort} />
               <SortHeader label="Age" column="age" sort={sort} onSort={toggleSort} />
               <span>Node</span>
+              <span className="sr-only">Actions</span>
             </div>
             <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
               {virtualizer.getVirtualItems().map((item) => (
@@ -193,7 +201,7 @@ function PodRowView({
     <div
       className={cn(
         COLUMNS,
-        "absolute inset-x-0 top-0 border-b border-border/50 transition-colors duration-100 hover:bg-accent",
+        "group absolute inset-x-0 top-0 border-b border-border/50 transition-colors duration-100 hover:bg-accent",
       )}
       style={style}
     >
@@ -221,7 +229,58 @@ function PodRowView({
       </span>
       <span className="text-muted-foreground tabular-nums">{formatAge(pod.createdAt, now)}</span>
       <span className="truncate text-muted-foreground">{pod.node ?? "—"}</span>
+      <span className="flex justify-end gap-0.5 opacity-0 transition-opacity duration-100 group-hover:opacity-100 focus-within:opacity-100 has-data-[state=open]:opacity-100">
+        <PodAction pod={pod} kind="logs" label="Logs" icon={<ScrollText />} />
+        <PodAction pod={pod} kind="shell" label="Shell" icon={<SquareTerminal />} />
+      </span>
     </div>
+  );
+}
+
+/** Opens logs or a shell in the dock; asks which container when there are several. */
+function PodAction({
+  pod,
+  kind,
+  label,
+  icon,
+}: {
+  pod: PodRow;
+  kind: DockTab["kind"];
+  label: string;
+  icon: React.ReactNode;
+}) {
+  const { context, openTab } = useStore();
+  if (!context) return null;
+  const open = (container: string | null) =>
+    openTab(kind, { context, namespace: pod.namespace, pod: pod.name, container });
+
+  const buttonClass =
+    "flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors duration-100 hover:bg-foreground/10 hover:text-foreground data-[state=open]:bg-foreground/10 [&_svg]:size-3.5";
+
+  if (pod.containerNames.length <= 1) {
+    return (
+      <button aria-label={`${label}: ${pod.name}`} title={label} onClick={() => open(null)} className={buttonClass}>
+        {icon}
+      </button>
+    );
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button aria-label={`${label}: ${pod.name}`} title={label} className={buttonClass}>
+          {icon}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuLabel>{label} · container</DropdownMenuLabel>
+        {pod.containerNames.map((name) => (
+          <DropdownMenuItem key={name} onSelect={() => open(name)}>
+            {icon}
+            <span className="truncate">{name}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
