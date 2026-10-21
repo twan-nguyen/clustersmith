@@ -1,18 +1,28 @@
 import {
   Activity,
+  Archive,
+  BadgeCheck,
   Box,
   CalendarClock,
   Copy,
+  Cylinder,
   Database,
   FileCog,
   FolderTree,
+  Gauge,
   Globe,
+  HardDrive,
   KeyRound,
+  Layers,
+  Link,
   ListChecks,
   Network,
+  Puzzle,
   Rocket,
   Server,
-  Shapes,
+  Shield,
+  ShieldCheck,
+  UserRound,
 } from "lucide-react";
 
 const ICONS: Record<string, React.ComponentType> = {
@@ -29,10 +39,22 @@ const ICONS: Record<string, React.ComponentType> = {
   nodes: Server,
   namespaces: FolderTree,
   events: Activity,
+  replicasets: Layers,
+  networkpolicies: Shield,
+  horizontalpodautoscalers: Gauge,
+  poddisruptionbudgets: ShieldCheck,
+  persistentvolumeclaims: HardDrive,
+  persistentvolumes: Cylinder,
+  storageclasses: Archive,
+  serviceaccounts: UserRound,
+  roles: BadgeCheck,
+  clusterroles: BadgeCheck,
+  rolebindings: Link,
+  clusterrolebindings: Link,
 };
 
-/** The icon for a kind, by its id; unknown kinds get a generic shape. */
+/** The icon for a kind, by its id; custom kinds share a puzzle piece. */
 export function KindIcon({ kind }: { kind: string }) {
-  const Icon = ICONS[kind] ?? Shapes;
+  const Icon = ICONS[kind] ?? Puzzle;
   return <Icon />;
 }

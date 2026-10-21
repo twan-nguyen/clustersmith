@@ -1,4 +1,13 @@
-import { ChevronDown, ChevronUp, FileCode, ScrollText, SquareTerminal, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  FileCode,
+  FilePlus,
+  History,
+  ScrollText,
+  SquareTerminal,
+  X,
+} from "lucide-react";
 import { Suspense, lazy, useState } from "react";
 
 import { LogsView } from "@/components/logs-view";
@@ -11,6 +20,9 @@ const ShellView = lazy(() =>
 );
 const YamlView = lazy(() =>
   import("@/components/yaml-view").then((m) => ({ default: m.YamlView })),
+);
+const CreateView = lazy(() =>
+  import("@/components/yaml-view").then((m) => ({ default: m.CreateView })),
 );
 
 const TAB_BAR_HEIGHT = 36;
@@ -103,7 +115,9 @@ export function Dock() {
               <Suspense>
                 {tab.kind === "yaml" ? (
                   <YamlView tab={tab} active={active && !dockCollapsed} />
-                ) : tab.kind === "logs" ? (
+                ) : tab.kind === "create" ? (
+                  <CreateView tab={tab} active={active && !dockCollapsed} />
+                ) : tab.kind === "logs" || tab.kind === "workload-logs" ? (
                   <LogsView tab={tab} active={active && !dockCollapsed} />
                 ) : (
                   <ShellView tab={tab} active={active && !dockCollapsed} />
@@ -166,6 +180,24 @@ function TabButton({
 
 /** How a tab names itself in the tab bar and its tooltip. */
 function describe(tab: DockTab) {
+  if (tab.kind === "create") {
+    return {
+      Icon: FilePlus,
+      kindLabel: "New resource",
+      name: "New resource",
+      detail: null,
+      where: [tab.context, tab.namespace].filter(Boolean).join(" / "),
+    };
+  }
+  if (tab.kind === "workload-logs") {
+    return {
+      Icon: ScrollText,
+      kindLabel: "Logs",
+      name: tab.name,
+      detail: "all pods",
+      where: [tab.context, tab.resource, tab.namespace, tab.name].filter(Boolean).join(" / "),
+    };
+  }
   if (tab.kind === "yaml") {
     return {
       Icon: FileCode,
@@ -175,11 +207,12 @@ function describe(tab: DockTab) {
       where: [tab.context, tab.resource, tab.namespace, tab.name].filter(Boolean).join(" / "),
     };
   }
+  const previous = tab.kind === "logs" && tab.previous;
   return {
-    Icon: tab.kind === "logs" ? ScrollText : SquareTerminal,
-    kindLabel: tab.kind === "logs" ? "Logs" : "Shell",
+    Icon: previous ? History : tab.kind === "logs" ? ScrollText : SquareTerminal,
+    kindLabel: previous ? "Previous logs" : tab.kind === "logs" ? "Logs" : "Shell",
     name: tab.pod,
-    detail: tab.container,
+    detail: [tab.container, previous && "previous"].filter(Boolean).join(" · ") || null,
     where: [tab.context, tab.namespace, tab.pod, tab.container].filter(Boolean).join(" / "),
   };
 }

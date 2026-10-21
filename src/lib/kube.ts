@@ -69,7 +69,19 @@ export type ResourceKind = {
   ageLabel: string;
   restartable: boolean;
   scalable: boolean;
+  /** Empty for the core API; custom kinds are grouped by it in the sidebar. */
+  group: string;
+  version: string;
 };
+
+export const apiVersion = (kind: ResourceKind) =>
+  kind.group ? `${kind.group}/${kind.version}` : kind.version;
+
+/** Custom resource kinds are addressed as `crd:<definition name>`. */
+export const isCustomKind = (id: string) => id.startsWith("crd:");
+
+export const listCustomKinds = (context: string) =>
+  invoke<ResourceKind[]>("list_custom_kinds", { context });
 
 export type ResourceRow = {
   uid: string;
@@ -151,7 +163,8 @@ export const applyResourceYaml = (ref: ObjectRef, yaml: string) =>
   invoke<string>("apply_resource_yaml", { ...objectArgs(ref), yaml });
 
 export type LogEvent =
-  | { type: "lines"; lines: string[] }
+  /** `source` names the pod when a tab follows several. */
+  | { type: "lines"; lines: string[]; source?: string }
   | { type: "reconnecting" }
   | { type: "live" }
   | { type: "ended" };
@@ -167,12 +180,14 @@ export type PodTarget = {
   namespace: string;
   pod: string;
   container: string | null;
+  /** The last terminated run of the container, as `kubectl logs --previous`. */
+  previous?: boolean;
 };
 
 export function openLogs(target: PodTarget, onEvent: (event: LogEvent) => void) {
   const channel = new Channel<LogEvent>();
   channel.onmessage = onEvent;
-  return invoke<number>("open_logs", { ...target, onEvent: channel });
+  return invoke<number>("open_logs", { previous: false, ...target, onEvent: channel });
 }
 
 export function openShell(
@@ -236,3 +251,71 @@ export const forwardUrl = (forward: PortForward) => `http://localhost:${forward.
 /** The same number as `port` when it is free locally, otherwise any free port. */
 export const suggestLocalPort = (port: number) =>
   invoke<number | null>("suggest_local_port", { port });
+
+/** Kinds whose pods a tab can follow together, and the details panel lists. */
+export const hasPods = (resource: string) =>
+  ["deployments", "statefulsets", "daemonsets", "replicasets", "jobs", "services"].includes(
+    resource,
+  );
+
+export function openWorkloadLogs(ref: ObjectRef, onEvent: (event: LogEvent) => void) {
+  const channel = new Channel<LogEvent>();
+  channel.onmessage = onEvent;
+  return invoke<number>("open_workload_logs", { ...objectArgs(ref), onEvent: channel });
+}
+
+export const saveLog = (path: string, text: string) => invoke<void>("save_log", { path, text });
+
+// The API object as JSON; the details panel reads what each kind has.
+export type KubeObject = Record<string, any>;
+
+export type EventRow = {
+  /** `Normal` or `Warning`. */
+  kind: string;
+  reason: string;
+  message: string;
+  count: number;
+  lastSeen: string | null;
+};
+
+export type Details = {
+  object: KubeObject;
+  /** Newest first. */
+  events: EventRow[];
+  /** Pods the object selects or runs; `null` for kinds without pods. */
+  pods: PodRow[] | null;
+};
+
+export const describeResource = (ref: ObjectRef) =>
+  invoke<Details>("describe_resource", objectArgs(ref));
+
+/** Cores and bytes; nodes also say what they can give. */
+export type Usage = {
+  cpu: number;
+  memory: number;
+  cpuAllocatable?: number;
+  memoryAllocatable?: number;
+};
+
+/** Keyed `namespace/name` for pods, `name` for nodes; `null` without metrics-server. */
+export const getMetrics = (context: string, kind: "pods" | "nodes", namespace: string | null) =>
+  invoke<Record<string, Usage> | null>("get_metrics", { context, kind, namespace });
+
+export const cordonNode = (context: string, name: string, cordon: boolean) =>
+  invoke<void>("cordon_node", { context, name, cordon });
+
+export type DrainReport = {
+  evicted: string[];
+  /** DaemonSet and static pods, left in place. */
+  skipped: string[];
+  /** Pods no controller recreates; listed without evicting unless forced. */
+  unmanaged: string[];
+  failed: { pod: string; error: string }[];
+};
+
+export const drainNode = (context: string, name: string, force: boolean) =>
+  invoke<DrainReport>("drain_node", { context, name, force });
+
+/** Creates every object in the YAML; resolves to `kind/name` of each. */
+export const createResources = (context: string, namespace: string | null, yaml: string) =>
+  invoke<string[]>("create_resources", { context, namespace, yaml });

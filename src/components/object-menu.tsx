@@ -1,4 +1,16 @@
-import { Cable, Ellipsis, FileCode, RotateCw, Scaling, Trash2 } from "lucide-react";
+import {
+  Ban,
+  Cable,
+  CircleCheck,
+  Ellipsis,
+  FileCode,
+  History,
+  LogOut,
+  RotateCw,
+  Scaling,
+  ScrollText,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
 import { PortForwardDialog } from "@/components/port-forward-dialog";
@@ -16,20 +28,27 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  type DrainReport,
   type ObjectRef,
   type ResourceKind,
+  cordonNode,
   deleteResource,
+  drainNode,
   forwardable,
+  hasPods,
   restartWorkload,
   scaleWorkload,
 } from "@/lib/kube";
 import { errorMessage } from "@/lib/utils";
 import { useStore } from "@/store";
 
-type Pending = "delete" | "restart" | "scale" | "forward" | null;
+type Pending = "delete" | "restart" | "scale" | "forward" | "cordon" | "drain" | null;
 
 /**
  * The "⋯" menu on a row. Anything that changes the cluster asks first; the
@@ -39,11 +58,17 @@ export function ObjectMenu({
   object,
   kind,
   replicas,
+  containers,
+  cordoned,
 }: {
   object: ObjectRef;
   kind: ResourceKind | undefined;
   /** Current desired replicas, to prefill the scale dialog. */
   replicas?: number;
+  /** A pod's containers, to pick whose previous logs to read. */
+  containers?: string[];
+  /** For nodes: whether new pods are kept off it. */
+  cordoned?: boolean;
 }) {
   const openTab = useStore((s) => s.openTab);
   const [pending, setPending] = useState<Pending>(null);
@@ -66,6 +91,39 @@ export function ObjectMenu({
             <FileCode />
             Edit YAML
           </DropdownMenuItem>
+          {hasPods(object.resource) && object.namespace && (
+            <DropdownMenuItem onSelect={() => openTab({ kind: "workload-logs", ...object })}>
+              <ScrollText />
+              Logs of all pods
+            </DropdownMenuItem>
+          )}
+          {object.resource === "pods" && object.namespace && (
+            <PreviousLogs
+              containers={containers ?? []}
+              onOpen={(container) =>
+                openTab({
+                  kind: "logs",
+                  context: object.context,
+                  namespace: object.namespace!,
+                  pod: object.name,
+                  container,
+                  previous: true,
+                })
+              }
+            />
+          )}
+          {object.resource === "nodes" && (
+            <>
+              <DropdownMenuItem onSelect={() => setPending("cordon")}>
+                {cordoned ? <CircleCheck /> : <Ban />}
+                {cordoned ? "Uncordon" : "Cordon"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setPending("drain")}>
+                <LogOut />
+                Drain…
+              </DropdownMenuItem>
+            </>
+          )}
           {forwardable(object.resource) && (
             <DropdownMenuItem onSelect={() => setPending("forward")}>
               <Cable />
@@ -113,6 +171,24 @@ export function ObjectMenu({
         confirmLabel="Restart"
         onConfirm={() => restartWorkload(object)}
       />
+      <ConfirmDialog
+        open={pending === "cordon"}
+        onClose={() => setPending(null)}
+        title={`${cordoned ? "Uncordon" : "Cordon"} node "${object.name}"?`}
+        description={
+          cordoned
+            ? "New pods can be scheduled on it again."
+            : "No new pods are scheduled on it; pods already there keep running."
+        }
+        confirmLabel={cordoned ? "Uncordon" : "Cordon"}
+        onConfirm={() => cordonNode(object.context, object.name, !cordoned)}
+      />
+      <DrainDialog
+        open={pending === "drain"}
+        onClose={() => setPending(null)}
+        context={object.context}
+        node={object.name}
+      />
       <PortForwardDialog
         open={pending === "forward"}
         onClose={() => setPending(null)}
@@ -126,6 +202,161 @@ export function ObjectMenu({
         onScale={(n) => scaleWorkload(object, n)}
       />
     </>
+  );
+}
+
+/** The previous run's logs; asks which container when there are several. */
+function PreviousLogs({
+  containers,
+  onOpen,
+}: {
+  containers: string[];
+  onOpen: (container: string | null) => void;
+}) {
+  if (containers.length <= 1) {
+    return (
+      <DropdownMenuItem onSelect={() => onOpen(null)}>
+        <History />
+        Previous logs
+      </DropdownMenuItem>
+    );
+  }
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <History />
+        Previous logs
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="w-48">
+        {containers.map((name) => (
+          <DropdownMenuItem key={name} onSelect={() => onOpen(name)}>
+            <span className="truncate">{name}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
+/**
+ * Drains a node like `kubectl drain --ignore-daemonsets`. Pods no controller
+ * would recreate stop it first and are listed, so deleting them is a choice.
+ */
+function DrainDialog({
+  open,
+  onClose,
+  context,
+  node,
+}: {
+  open: boolean;
+  onClose: () => void;
+  context: string;
+  node: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [report, setReport] = useState<DrainReport | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setBusy(false);
+    setError(null);
+    setReport(null);
+  }, [open]);
+
+  async function drain(force: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      setReport(await drainNode(context, node, force));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Unmanaged pods without force means nothing was evicted yet.
+  const blocked = report !== null && report.unmanaged.length > 0 && report.evicted.length === 0;
+  const done = report !== null && !blocked;
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !busy && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="break-all">Drain node "{node}"?</DialogTitle>
+          <DialogDescription>
+            The node is cordoned, then its pods are evicted so their controllers start them
+            elsewhere. DaemonSet pods stay. Disruption budgets are respected, which can take a
+            minute.
+          </DialogDescription>
+        </DialogHeader>
+
+        {busy && (
+          <p className="flex animate-fade-in items-center gap-2 text-muted-foreground">
+            <span className="size-1.5 animate-pulse rounded-full bg-warning motion-reduce:animate-none" />
+            Draining…
+          </p>
+        )}
+        {blocked && (
+          <div className="animate-fade-in">
+            <p className="text-warning">
+              {report.unmanaged.length} pod{report.unmanaged.length > 1 ? "s are" : " is"} not
+              managed by a controller and would be gone for good:
+            </p>
+            <PodList pods={report.unmanaged} />
+          </div>
+        )}
+        {done && (
+          <div className="flex animate-fade-in flex-col gap-1">
+            <p>
+              Evicted {report.evicted.length} pod{report.evicted.length === 1 ? "" : "s"}
+              {report.skipped.length > 0 && `, left ${report.skipped.length} DaemonSet or static`}.
+            </p>
+            {report.failed.length > 0 && (
+              <>
+                <p className="text-destructive">Could not evict {report.failed.length}:</p>
+                <PodList pods={report.failed.map((f) => `${f.pod}: ${f.error}`)} />
+              </>
+            )}
+          </div>
+        )}
+        {error && <p className="animate-fade-in break-words text-destructive">{error}</p>}
+
+        <DialogFooter>
+          {done ? (
+            <Button onClick={onClose}>Done</Button>
+          ) : (
+            <>
+              <Button variant="outline" disabled={busy} onClick={onClose}>
+                Cancel
+              </Button>
+              {blocked ? (
+                <Button variant="destructive" disabled={busy} onClick={() => drain(true)}>
+                  Delete them and drain
+                </Button>
+              ) : (
+                <Button variant="destructive" disabled={busy} onClick={() => drain(false)}>
+                  Drain
+                </Button>
+              )}
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PodList({ pods }: { pods: string[] }) {
+  return (
+    <ul className="mt-1 max-h-40 overflow-auto rounded-md border border-border px-3 py-2 font-mono text-xs">
+      {pods.map((pod) => (
+        <li key={pod} className="break-all">
+          {pod}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -152,7 +383,7 @@ function useAction(onClose: () => void) {
   return { busy, error, run, close };
 }
 
-function ConfirmDialog({
+export function ConfirmDialog({
   open,
   onClose,
   title,

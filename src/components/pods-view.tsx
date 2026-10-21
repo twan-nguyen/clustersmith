@@ -9,8 +9,11 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { formatAge, statusTone } from "@/lib/format";
-import type { PodRow } from "@/lib/kube";
+import { useMemo } from "react";
+
+import { formatAge, formatBytes, formatCpu, statusTone } from "@/lib/format";
+import type { PodRow, Usage } from "@/lib/kube";
+import { useMetrics } from "@/lib/use-metrics";
 import { cn } from "@/lib/utils";
 import { type PodTab, useStore } from "@/store";
 
@@ -80,17 +83,64 @@ const COLUMNS: Column<PodRow>[] = [
   },
 ];
 
+/** CPU and memory columns, added once metrics-server answers. */
+function usageColumns(metrics: Record<string, Usage>): Column<PodRow>[] {
+  const usage = (p: PodRow) => metrics[`${p.namespace}/${p.name}`];
+  return [
+    {
+      id: "cpu",
+      label: "CPU",
+      width: "64px",
+      sort: (a, b) => (usage(a)?.cpu ?? -1) - (usage(b)?.cpu ?? -1),
+      cell: (p) => {
+        const u = usage(p);
+        return <span className="text-muted-foreground tabular-nums">{u ? formatCpu(u.cpu) : "—"}</span>;
+      },
+    },
+    {
+      id: "memory",
+      label: "Memory",
+      width: "72px",
+      sort: (a, b) => (usage(a)?.memory ?? -1) - (usage(b)?.memory ?? -1),
+      cell: (p) => {
+        const u = usage(p);
+        return (
+          <span className="text-muted-foreground tabular-nums">{u ? formatBytes(u.memory) : "—"}</span>
+        );
+      },
+    },
+  ];
+}
+
 export function PodsView() {
-  const { pods, kinds, context } = useStore();
+  const { pods, kinds, context, openTab } = useStore();
   const podKind = kinds.find((k) => k.id === "pods");
+  const metrics = useMetrics("pods");
+  const columns = useMemo(() => {
+    if (!metrics) return COLUMNS;
+    // Usage reads best next to restarts, before age and node.
+    const at = COLUMNS.findIndex((c) => c.id === "age");
+    return [...COLUMNS.slice(0, at), ...usageColumns(metrics), ...COLUMNS.slice(at)];
+  }, [metrics]);
+
+  // l: logs, s: shell, p: the previous run's logs; all in the default container.
+  function onKey(key: string, pod: PodRow) {
+    const kind = { l: "logs", s: "shell", p: "logs" }[key] as PodTab["kind"] | undefined;
+    if (!kind || !context) return false;
+    const target = { context, namespace: pod.namespace, pod: pod.name, container: null };
+    openTab({ kind, ...target, previous: key === "p" });
+    return true;
+  }
 
   return (
     <ListPanel
       icon={<Box />}
+      kind={podKind}
       title="Pods"
       namespaced
-      columns={COLUMNS}
+      columns={columns}
       rows={pods}
+      onKey={onKey}
       signature={(p) => `${p.status}|${p.restarts}|${p.ready}`}
       actions={(pod) =>
         context && (
@@ -100,6 +150,7 @@ export function PodsView() {
             <ObjectMenu
               object={{ context, resource: "pods", namespace: pod.namespace, name: pod.name }}
               kind={podKind}
+              containers={pod.containerNames}
             />
           </>
         )

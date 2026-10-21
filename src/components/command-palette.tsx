@@ -1,4 +1,4 @@
-import { Box, Layers, Server, Settings } from "lucide-react";
+import { Box, Cable, FilePlus, Layers, Server, Settings } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -13,7 +13,8 @@ import {
 } from "@/components/ui/command";
 import { KindIcon } from "@/components/kind-icon";
 import { contextLabel } from "@/lib/kube";
-import { useStore } from "@/store";
+import { templateFor } from "@/lib/templates";
+import { findKind, useStore } from "@/store";
 
 /** Pods can number in the thousands; the palette shows the best few. */
 const MAX_POD_RESULTS = 50;
@@ -30,7 +31,12 @@ export function CommandPalette() {
     setQuery,
     setView,
     kinds,
+    customKinds,
     selectKind,
+    context,
+    namespace,
+    openTab,
+    select,
   } = useStore();
   const [search, setSearch] = useState("");
 
@@ -68,20 +74,40 @@ export function CommandPalette() {
         <CommandInput
           value={search}
           onValueChange={setSearch}
-          placeholder="Jump to a context, namespace or pod…"
+          placeholder="Jump to a kind, context, namespace or pod…"
         />
         <CommandList>
           <CommandEmpty>No results.</CommandEmpty>
 
-          {(matches("settings") || matches("clusters") || matches("kubeconfig files")) && (
-            <CommandGroup heading="Actions">
+          <CommandGroup heading="Actions">
+            {context && (matches("create resource") || matches("new yaml")) && (
+              <CommandItem
+                value="action:create"
+                onSelect={() =>
+                  run(() => {
+                    const kind = findKind(useStore.getState(), useStore.getState().kind);
+                    openTab({ kind: "create", context, namespace, template: templateFor(kind, namespace) });
+                  })
+                }
+              >
+                <FilePlus />
+                Create resource from YAML…
+              </CommandItem>
+            )}
+            {matches("port forwards") && (
+              <CommandItem value="action:forwards" onSelect={() => run(() => setView("forwards"))}>
+                <Cable />
+                Port Forwards
+              </CommandItem>
+            )}
+            {(matches("settings") || matches("clusters") || matches("kubeconfig files")) && (
               <CommandItem value="action:settings" onSelect={() => run(() => setView("settings"))}>
                 <Settings />
                 Settings
                 <CommandShortcut>⌘,</CommandShortcut>
               </CommandItem>
-            </CommandGroup>
-          )}
+            )}
+          </CommandGroup>
 
           <CommandGroup heading="Go to">
             {kinds
@@ -97,6 +123,22 @@ export function CommandPalette() {
                   <span className="ml-auto text-xs text-muted-foreground">{k.section}</span>
                 </CommandItem>
               ))}
+            {/* Custom kinds can be many; they show once something is typed. */}
+            {needle &&
+              customKinds
+                .filter((k) => matches(k.label) || matches(k.group))
+                .slice(0, MAX_POD_RESULTS)
+                .map((k) => (
+                  <CommandItem
+                    key={k.id}
+                    value={`kind:${k.id}`}
+                    onSelect={() => run(() => selectKind(k.id))}
+                  >
+                    <KindIcon kind={k.id} />
+                    {k.label}
+                    <span className="ml-auto truncate text-xs text-muted-foreground">{k.group}</span>
+                  </CommandItem>
+                ))}
           </CommandGroup>
 
           <CommandGroup heading="Contexts">
@@ -133,7 +175,12 @@ export function CommandPalette() {
                 <CommandItem
                   key={p.uid}
                   value={`pod:${p.uid}`}
-                  onSelect={() => run(() => setQuery(p.name))}
+                  onSelect={() =>
+                    run(() => {
+                      setQuery(p.name);
+                      if (context) select({ context, resource: "pods", namespace: p.namespace, name: p.name, uid: p.uid });
+                    })
+                  }
                 >
                   <Box />
                   <span className="truncate">{p.name}</span>

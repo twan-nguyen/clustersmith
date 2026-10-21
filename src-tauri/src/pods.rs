@@ -43,7 +43,7 @@ pub async fn watch_pods(
     Ok(())
 }
 
-fn pod_row(pod: &Pod) -> PodRow {
+pub fn pod_row(pod: &Pod) -> PodRow {
     let statuses = pod
         .status
         .as_ref()

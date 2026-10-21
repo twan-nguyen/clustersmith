@@ -41,3 +41,22 @@ const TONES: Record<string, StatusTone> = {
 
 export const statusTone = (status: string): StatusTone =>
   TONES[status] ?? "unknown";
+
+/** CPU cores as `kubectl top` prints them: `125m` under one core, else `1.25`. */
+export function formatCpu(cores: number) {
+  if (cores < 1) return `${Math.round(cores * 1000)}m`;
+  return cores.toFixed(cores < 10 ? 2 : 1).replace(/\.?0+$/, "");
+}
+
+/** Bytes in binary units: `512Mi`, `1.5Gi`. */
+export function formatBytes(bytes: number) {
+  const units = ["", "Ki", "Mi", "Gi", "Ti"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const digits = value < 10 && unit > 0 ? 1 : 0;
+  return `${value.toFixed(digits).replace(/\.0$/, "")}${units[unit]}`;
+}

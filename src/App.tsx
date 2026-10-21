@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 
 import { CommandPalette } from "@/components/command-palette";
+import { ConnectingOverlay } from "@/components/connecting-overlay";
+import { DetailsPanel } from "@/components/details-panel";
 import { Dock } from "@/components/dock";
 import { PodsView } from "@/components/pods-view";
 import { PortForwardsView } from "@/components/port-forwards-view";
@@ -8,13 +10,38 @@ import { ResourceView } from "@/components/resource-view";
 import { SettingsView } from "@/components/settings-view";
 import { Sidebar } from "@/components/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useStore } from "@/store";
+import type { ResourceKind } from "@/lib/kube";
+import { findKind, useStore } from "@/store";
+
+/**
+ * Stands in for a remembered custom kind until its cluster lists it, so its
+ * rows show at once; the columns arrive with the real definition.
+ */
+function placeholderKind(id: string): ResourceKind {
+  const name = id.replace(/^crd:/, "").split(".")[0];
+  return {
+    id,
+    label: name,
+    singular: name,
+    section: "Custom Resources",
+    namespaced: true,
+    columns: [],
+    ageLabel: "Age",
+    restartable: false,
+    scalable: false,
+    group: "",
+    version: "",
+  };
+}
 
 function App() {
   const init = useStore((s) => s.init);
   const view = useStore((s) => s.view);
   const transparency = useStore((s) => s.transparency);
-  const kind = useStore((s) => s.kinds.find((k) => k.id === s.kind));
+  const kindId = useStore((s) => s.kind);
+  const known = useStore((s) => findKind(s, s.kind));
+  const kind = known ?? (kindId !== "pods" ? placeholderKind(kindId) : undefined);
+  const selected = useStore((s) => s.selected);
 
   useEffect(() => {
     init();
@@ -58,16 +85,22 @@ function App() {
             <SettingsView />
           ) : view === "forwards" ? (
             <PortForwardsView />
-          ) : kind && kind.id !== "pods" ? (
-            // Keyed so sorting and scroll start fresh for each kind.
-            <ResourceView key={kind.id} kind={kind} />
           ) : (
-            <PodsView />
+            <div className="flex min-h-0 flex-1 gap-2">
+              {kind && kind.id !== "pods" ? (
+                // Keyed so sorting and scroll start fresh for each kind.
+                <ResourceView key={kind.id} kind={kind} />
+              ) : (
+                <PodsView />
+              )}
+              {selected && <DetailsPanel selection={selected} />}
+            </div>
           )}
           <Dock />
         </div>
       </div>
       <CommandPalette />
+      <ConnectingOverlay />
     </TooltipProvider>
   );
 }

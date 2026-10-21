@@ -43,13 +43,20 @@ export function Sidebar() {
 }
 
 function AppNav() {
-  const { setPaletteOpen, kinds, kind, selectKind, view, setView, forwards } = useStore();
+  const { setPaletteOpen, kinds, customKinds, kind, selectKind, view, setView, forwards } =
+    useStore();
   // Kinds arrive in sidebar order; group them by section, keeping that order.
   const sections = useMemo(() => {
     const groups = new Map<string, ResourceKind[]>();
     for (const k of kinds) groups.set(k.section, [...(groups.get(k.section) ?? []), k]);
     return [...groups];
   }, [kinds]);
+  const customGroups = useMemo(() => {
+    const groups = new Map<string, ResourceKind[]>();
+    for (const k of customKinds) groups.set(k.group, [...(groups.get(k.group) ?? []), k]);
+    return [...groups];
+  }, [customKinds]);
+  const showKind = (id: string) => (id !== kind ? selectKind(id) : setView("pods"));
 
   return (
     <>
@@ -76,7 +83,7 @@ function AppNav() {
                 icon={<KindIcon kind={k.id} />}
                 label={k.label}
                 active={view === "pods" && k.id === kind}
-                onClick={() => (k.id !== kind ? selectKind(k.id) : setView("pods"))}
+                onClick={() => showKind(k.id)}
               />
             ))}
             {section === "Network" && (
@@ -90,6 +97,20 @@ function AppNav() {
             )}
           </Section>
         ))}
+        {customGroups.length > 0 && (
+          // Clusters often carry dozens of definitions; they start folded.
+          <Section title="Custom Resources" defaultOpen={false}>
+            {customGroups.map(([group, kinds]) => (
+              <CustomGroup
+                key={group}
+                group={group}
+                kinds={kinds}
+                active={view === "pods" ? kind : null}
+                onSelect={showKind}
+              />
+            ))}
+          </Section>
+        )}
       </nav>
 
       <div className="border-t border-sidebar-border px-3 py-2">
@@ -188,8 +209,16 @@ function SettingsNav() {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(true);
+function Section({
+  title,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="flex flex-col gap-px">
       <button
@@ -203,6 +232,54 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         />
       </button>
       <Collapsible open={open}>{children}</Collapsible>
+    </div>
+  );
+}
+
+/** One API group's custom kinds; opens by itself when it holds the kind on screen. */
+function CustomGroup({
+  group,
+  kinds,
+  active,
+  onSelect,
+}: {
+  group: string;
+  kinds: ResourceKind[];
+  active: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const holdsActive = kinds.some((k) => k.id === active);
+  const [open, setOpen] = useState(holdsActive);
+  return (
+    <div className="flex flex-col gap-px">
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open || holdsActive}
+        title={group}
+        className="flex h-7 items-center gap-1.5 rounded-md px-2 text-left text-muted-foreground transition-colors duration-100 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+      >
+        <ChevronDown
+          className={cn(
+            "size-3 shrink-0 transition-transform duration-200 ease-out-quart",
+            !(open || holdsActive) && "-rotate-90",
+          )}
+        />
+        <span className="flex-1 truncate">{group}</span>
+        <span className="text-xs tabular-nums">{kinds.length}</span>
+      </button>
+      <Collapsible open={open || holdsActive}>
+        {kinds.map((k) => (
+          <div key={k.id} className="pl-3">
+            <NavItem
+              icon={<KindIcon kind={k.id} />}
+              label={k.label}
+              title={`${k.label} · ${group}`}
+              active={k.id === active}
+              onClick={() => onSelect(k.id)}
+            />
+          </div>
+        ))}
+      </Collapsible>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 use kube::{
-    Api,
-    api::{DeleteParams, DynamicObject, Patch, PatchParams, PostParams},
+    Api, ResourceExt,
+    api::{DeleteParams, DynamicObject, GroupVersionKind, Patch, PatchParams, PostParams},
+    discovery::{Scope, pinned_kind},
 };
 use serde_json::json;
 use tauri::State;
@@ -8,7 +9,7 @@ use tauri::State;
 use crate::{
     clients::Clients,
     kubeconfig::KubeconfigSources,
-    resources::{KindSpec, find},
+    resources::{Resolved, resolve},
 };
 
 /// The API for one object's kind, scoped to its namespace.
@@ -18,10 +19,10 @@ async fn object_api(
     context: &str,
     kind: &str,
     namespace: Option<&str>,
-) -> Result<(Api<DynamicObject>, &'static KindSpec), String> {
-    let spec = find(kind)?;
+) -> Result<(Api<DynamicObject>, Resolved), String> {
     let client = clients.get(sources, context).await?;
-    Ok((spec.api(client, namespace), spec))
+    let kind = resolve(&client, kind).await?;
+    Ok((kind.api(client, namespace), kind))
 }
 
 #[tauri::command]
@@ -51,9 +52,9 @@ pub async fn restart_workload(
     sources: State<'_, KubeconfigSources>,
     clients: State<'_, Clients>,
 ) -> Result<(), String> {
-    let (api, spec) = object_api(&sources, &clients, &context, &kind, namespace.as_deref()).await?;
-    if !spec.restartable {
-        return Err(format!("{} cannot be restarted", spec.id));
+    let (api, kind) = object_api(&sources, &clients, &context, &kind, namespace.as_deref()).await?;
+    if !kind.restartable {
+        return Err(format!("{} cannot be restarted", kind.id));
     }
     let now = jiff::Timestamp::now().to_string();
     let patch = json!({
@@ -77,9 +78,9 @@ pub async fn scale_workload(
     sources: State<'_, KubeconfigSources>,
     clients: State<'_, Clients>,
 ) -> Result<(), String> {
-    let (api, spec) = object_api(&sources, &clients, &context, &kind, namespace.as_deref()).await?;
-    if !spec.scalable {
-        return Err(format!("{} cannot be scaled", spec.id));
+    let (api, kind) = object_api(&sources, &clients, &context, &kind, namespace.as_deref()).await?;
+    if !kind.scalable {
+        return Err(format!("{} cannot be scaled", kind.id));
     }
     let patch = json!({ "spec": { "replicas": replicas } });
     api.patch(&name, &PatchParams::default(), &Patch::Merge(patch))
@@ -135,9 +136,102 @@ pub async fn apply_resource_yaml(
     to_yaml(stored)
 }
 
+/// Creates every object in a YAML text, `---` separated, like `kubectl
+/// create -f`. Objects without a namespace go to `namespace`, else `default`.
+/// Returns `kind/name` for each one created; stops at the first failure.
+#[tauri::command]
+pub async fn create_resources(
+    context: String,
+    namespace: Option<String>,
+    yaml: String,
+    sources: State<'_, KubeconfigSources>,
+    clients: State<'_, Clients>,
+) -> Result<Vec<String>, String> {
+    let client = clients.get(&sources, &context).await?;
+    let documents = split_documents(&yaml);
+    if documents.is_empty() {
+        return Err("There is nothing to create".into());
+    }
+    let mut created = Vec::new();
+    for (index, document) in documents.iter().enumerate() {
+        let fail = |e: String| {
+            let done = match created.len() {
+                0 => String::new(),
+                _ => format!(" (created so far: {})", created.join(", ")),
+            };
+            let at = match documents.len() {
+                1 => String::new(),
+                _ => format!("Document {}: ", index + 1),
+            };
+            format!("{at}{e}{done}")
+        };
+        let object: DynamicObject =
+            serde_saphyr::from_str(document).map_err(|e| fail(format!("Invalid YAML: {e}")))?;
+        let types = object
+            .types
+            .as_ref()
+            .ok_or_else(|| fail("apiVersion and kind are required".into()))?;
+        let (group, version) = match types.api_version.split_once('/') {
+            Some((group, version)) => (group, version),
+            None => ("", types.api_version.as_str()),
+        };
+        let gvk = GroupVersionKind::gvk(group, version, &types.kind);
+        let (resource, capabilities) = pinned_kind(&client, &gvk)
+            .await
+            .map_err(|e| fail(e.to_string()))?;
+        let api: Api<DynamicObject> = match capabilities.scope {
+            Scope::Namespaced => {
+                let ns = object
+                    .namespace()
+                    .or_else(|| namespace.clone())
+                    .unwrap_or_else(|| "default".into());
+                Api::namespaced_with(client.clone(), &ns, &resource)
+            }
+            Scope::Cluster => Api::all_with(client.clone(), &resource),
+        };
+        let stored = api
+            .create(&PostParams::default(), &object)
+            .await
+            .map_err(|e| fail(e.to_string()))?;
+        created.push(format!(
+            "{}/{}",
+            types.kind.to_lowercase(),
+            stored.name_any()
+        ));
+    }
+    Ok(created)
+}
+
+/// Splits a multi-document YAML text, dropping documents with no content.
+fn split_documents(yaml: &str) -> Vec<String> {
+    let mut documents = vec![String::new()];
+    for line in yaml.lines() {
+        if line.trim_end() == "---" {
+            documents.push(String::new());
+        } else {
+            let current = documents.last_mut().unwrap();
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    documents.retain(|d| {
+        d.lines()
+            .any(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+    });
+    documents
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn documents_split_on_separators() {
+        let yaml = "---\n# comment only\n---\nkind: A\n---\nkind: B\n...\n";
+        let docs = split_documents(yaml);
+        assert_eq!(docs.len(), 2);
+        assert!(docs[0].contains("kind: A") && docs[1].contains("kind: B"));
+    }
 
     #[test]
     fn yaml_round_trips_without_managed_fields() {

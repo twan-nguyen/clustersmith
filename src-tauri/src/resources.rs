@@ -8,16 +8,17 @@ use tauri::{State, ipc::Channel};
 
 use crate::{
     clients::Clients,
+    custom,
     kubeconfig::KubeconfigSources,
     watch::{ViewWatch, WatchEvent, run_watch},
 };
 
 /// A row color, matching the UI's status icons.
-type Tone = &'static str;
-const OK: Tone = "ok";
-const DONE: Tone = "done";
-const PENDING: Tone = "pending";
-const FAILED: Tone = "failed";
+pub type Tone = &'static str;
+pub const OK: Tone = "ok";
+pub const DONE: Tone = "done";
+pub const PENDING: Tone = "pending";
+pub const FAILED: Tone = "failed";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +36,8 @@ const fn time_col(label: &'static str) -> Column {
     Column { label, time: true }
 }
 
+type RowFn = fn(&DynamicObject) -> (Vec<String>, Option<Tone>);
+
 /// One kind of object the sidebar lists, with the columns `kubectl get` shows.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,9 +45,8 @@ pub struct KindSpec {
     pub id: &'static str,
     label: &'static str,
     section: &'static str,
-    #[serde(skip)]
+    /// Empty for the core API.
     group: &'static str,
-    #[serde(skip)]
     version: &'static str,
     /// The API kind, such as `Deployment`; the UI uses it as the singular name.
     #[serde(rename = "singular")]
@@ -55,7 +57,7 @@ pub struct KindSpec {
     pub restartable: bool,
     pub scalable: bool,
     #[serde(skip)]
-    row: fn(&DynamicObject) -> (Vec<String>, Option<Tone>),
+    row: RowFn,
 }
 
 impl KindSpec {
@@ -63,14 +65,81 @@ impl KindSpec {
         let gvk = GroupVersionKind::gvk(self.group, self.version, self.kind);
         ApiResource::from_gvk_with_plural(&gvk, self.id)
     }
+}
 
+/// How a row's cells are read: a built-in kind's own function, or the
+/// printer columns a custom resource definition declares.
+pub enum Cells {
+    Builtin(RowFn),
+    Printer(Vec<String>),
+}
+
+/// What watches and actions need to know about a kind, built in or custom.
+pub struct Resolved {
+    pub id: String,
+    pub resource: ApiResource,
+    pub namespaced: bool,
+    pub restartable: bool,
+    pub scalable: bool,
+    pub cells: Cells,
+}
+
+impl From<&'static KindSpec> for Resolved {
+    fn from(spec: &'static KindSpec) -> Self {
+        Resolved {
+            id: spec.id.to_owned(),
+            resource: spec.api_resource(),
+            namespaced: spec.namespaced,
+            restartable: spec.restartable,
+            scalable: spec.scalable,
+            cells: Cells::Builtin(spec.row),
+        }
+    }
+}
+
+impl Resolved {
     /// Scoped to `namespace` when given and the kind lives in namespaces.
     pub fn api(&self, client: Client, namespace: Option<&str>) -> Api<DynamicObject> {
-        let resource = self.api_resource();
         match namespace.filter(|_| self.namespaced) {
-            Some(ns) => Api::namespaced_with(client, ns, &resource),
-            None => Api::all_with(client, &resource),
+            Some(ns) => Api::namespaced_with(client, ns, &self.resource),
+            None => Api::all_with(client, &self.resource),
         }
+    }
+
+    fn row(&self, object: &DynamicObject) -> ResourceRow {
+        let (cells, tone) = match &self.cells {
+            Cells::Builtin(row) => row(object),
+            Cells::Printer(paths) => custom::printer_row(paths, object),
+        };
+        let created = || {
+            object
+                .metadata
+                .creation_timestamp
+                .as_ref()
+                .map(|t| t.0.to_string())
+        };
+        let age = if self.id == "events" {
+            last_seen(&object.data).or_else(created)
+        } else {
+            created()
+        };
+        ResourceRow {
+            uid: object.uid().unwrap_or_default(),
+            name: object.name_any(),
+            namespace: object.namespace(),
+            cells,
+            tone,
+            age,
+        }
+    }
+}
+
+/// Looks a kind up by the id the UI uses: a built-in plural name, or a
+/// custom resource definition's name behind [`custom::PREFIX`].
+pub async fn resolve(client: &Client, id: &str) -> Result<Resolved, String> {
+    match id.strip_prefix(custom::PREFIX) {
+        Some(name) => custom::resolve(client, name).await,
+        None => find(id).map(Resolved::from),
     }
 }
 
@@ -81,7 +150,7 @@ const fn kind(
     (group, version, kind): (&'static str, &'static str, &'static str),
     namespaced: bool,
     columns: &'static [Column],
-    row: fn(&DynamicObject) -> (Vec<String>, Option<Tone>),
+    row: RowFn,
 ) -> KindSpec {
     KindSpec {
         id,
@@ -156,6 +225,18 @@ static KINDS: &[KindSpec] = &[
             daemon_set,
         )
     },
+    KindSpec {
+        scalable: true,
+        ..kind(
+            "replicasets",
+            "ReplicaSets",
+            "Workloads",
+            ("apps", "v1", "ReplicaSet"),
+            true,
+            &[col("Desired"), col("Current"), col("Ready")],
+            replica_set,
+        )
+    },
     kind(
         "jobs",
         "Jobs",
@@ -203,6 +284,15 @@ static KINDS: &[KindSpec] = &[
         ingress,
     ),
     kind(
+        "networkpolicies",
+        "Network Policies",
+        "Network",
+        ("networking.k8s.io", "v1", "NetworkPolicy"),
+        true,
+        &[col("Pod selector"), col("Policy types")],
+        network_policy,
+    ),
+    kind(
         "configmaps",
         "ConfigMaps",
         "Config",
@@ -219,6 +309,124 @@ static KINDS: &[KindSpec] = &[
         true,
         &[col("Type"), col("Data")],
         secret,
+    ),
+    kind(
+        "horizontalpodautoscalers",
+        "Autoscalers",
+        "Config",
+        ("autoscaling", "v2", "HorizontalPodAutoscaler"),
+        true,
+        &[
+            col("Reference"),
+            col("Targets"),
+            col("Min pods"),
+            col("Max pods"),
+            col("Replicas"),
+        ],
+        autoscaler,
+    ),
+    kind(
+        "poddisruptionbudgets",
+        "Disruption Budgets",
+        "Config",
+        ("policy", "v1", "PodDisruptionBudget"),
+        true,
+        &[
+            col("Min available"),
+            col("Max unavailable"),
+            col("Allowed disruptions"),
+        ],
+        disruption_budget,
+    ),
+    kind(
+        "persistentvolumeclaims",
+        "Volume Claims",
+        "Storage",
+        ("", "v1", "PersistentVolumeClaim"),
+        true,
+        &[
+            col("Status"),
+            col("Volume"),
+            col("Capacity"),
+            col("Access modes"),
+            col("Storage class"),
+        ],
+        volume_claim,
+    ),
+    kind(
+        "persistentvolumes",
+        "Volumes",
+        "Storage",
+        ("", "v1", "PersistentVolume"),
+        false,
+        &[
+            col("Capacity"),
+            col("Access modes"),
+            col("Reclaim policy"),
+            col("Status"),
+            col("Claim"),
+            col("Storage class"),
+        ],
+        volume,
+    ),
+    kind(
+        "storageclasses",
+        "Storage Classes",
+        "Storage",
+        ("storage.k8s.io", "v1", "StorageClass"),
+        false,
+        &[
+            col("Provisioner"),
+            col("Reclaim policy"),
+            col("Binding mode"),
+            col("Default"),
+        ],
+        storage_class,
+    ),
+    kind(
+        "serviceaccounts",
+        "Service Accounts",
+        "Access Control",
+        ("", "v1", "ServiceAccount"),
+        true,
+        &[col("Secrets")],
+        service_account,
+    ),
+    kind(
+        "roles",
+        "Roles",
+        "Access Control",
+        ("rbac.authorization.k8s.io", "v1", "Role"),
+        true,
+        &[col("Rules")],
+        role,
+    ),
+    kind(
+        "rolebindings",
+        "Role Bindings",
+        "Access Control",
+        ("rbac.authorization.k8s.io", "v1", "RoleBinding"),
+        true,
+        &[col("Role"), col("Subjects")],
+        role_binding,
+    ),
+    kind(
+        "clusterroles",
+        "Cluster Roles",
+        "Access Control",
+        ("rbac.authorization.k8s.io", "v1", "ClusterRole"),
+        false,
+        &[col("Rules")],
+        role,
+    ),
+    kind(
+        "clusterrolebindings",
+        "Cluster Role Bindings",
+        "Access Control",
+        ("rbac.authorization.k8s.io", "v1", "ClusterRoleBinding"),
+        false,
+        &[col("Role"), col("Subjects")],
+        role_binding,
     ),
     kind(
         "nodes",
@@ -282,30 +490,6 @@ pub struct ResourceRow {
     age: Option<String>,
 }
 
-fn resource_row(spec: &KindSpec, object: &DynamicObject) -> ResourceRow {
-    let (cells, tone) = (spec.row)(object);
-    let created = || {
-        object
-            .metadata
-            .creation_timestamp
-            .as_ref()
-            .map(|t| t.0.to_string())
-    };
-    let age = if spec.id == "events" {
-        last_seen(&object.data).or_else(created)
-    } else {
-        created()
-    };
-    ResourceRow {
-        uid: object.uid().unwrap_or_default(),
-        name: object.name_any(),
-        namespace: object.namespace(),
-        cells,
-        tone,
-        age,
-    }
-}
-
 #[tauri::command]
 pub fn list_resource_kinds() -> &'static [KindSpec] {
     KINDS
@@ -321,25 +505,23 @@ pub async fn watch_resources(
     clients: State<'_, Clients>,
     watch: State<'_, ViewWatch>,
 ) -> Result<(), String> {
-    let spec = find(&kind)?;
     let generation = watch.begin();
     let client = clients.get(&sources, &context).await?;
-    let api = spec.api(client, namespace.as_deref());
-    let rows = move |object: &DynamicObject| resource_row(spec, object);
-    watch.start(
-        generation,
-        run_watch(api, spec.api_resource(), on_event, rows),
-    );
+    let kind = resolve(&client, &kind).await?;
+    let api = kind.api(client, namespace.as_deref());
+    let resource = kind.resource.clone();
+    let rows = move |object: &DynamicObject| kind.row(object);
+    watch.start(generation, run_watch(api, resource, on_event, rows));
     Ok(())
 }
 
 // Field access over the untyped object. Missing fields read as empty or zero.
 
-fn at<'a>(value: &'a Value, path: &[&str]) -> &'a Value {
+pub fn at<'a>(value: &'a Value, path: &[&str]) -> &'a Value {
     path.iter().fold(value, |v, key| &v[*key])
 }
 
-fn text(value: &Value, path: &[&str]) -> String {
+pub fn text(value: &Value, path: &[&str]) -> String {
     match at(value, path) {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
@@ -348,11 +530,11 @@ fn text(value: &Value, path: &[&str]) -> String {
     }
 }
 
-fn int(value: &Value, path: &[&str]) -> i64 {
+pub fn int(value: &Value, path: &[&str]) -> i64 {
     at(value, path).as_i64().unwrap_or(0)
 }
 
-fn list<'a>(value: &'a Value, path: &[&str]) -> &'a [Value] {
+pub fn list<'a>(value: &'a Value, path: &[&str]) -> &'a [Value] {
     at(value, path).as_array().map_or(&[], Vec::as_slice)
 }
 
@@ -411,6 +593,18 @@ fn daemon_set(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
     .iter()
     .map(|field| int(s, &[field]).to_string())
     .collect();
+    (cells, Some(replicas_tone(ready, desired)))
+}
+
+fn replica_set(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
+    let d = &o.data;
+    let desired = int(d, &["spec", "replicas"]);
+    let ready = int(d, &["status", "readyReplicas"]);
+    let cells = vec![
+        desired.to_string(),
+        int(d, &["status", "replicas"]).to_string(),
+        ready.to_string(),
+    ];
     (cells, Some(replicas_tone(ready, desired)))
 }
 
@@ -513,6 +707,33 @@ fn ingress(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
     (cells, None)
 }
 
+/// `app=web, tier=api`, as label selectors read on the command line.
+fn labels_text(value: &Value) -> String {
+    value
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or_default()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
+fn network_policy(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
+    let d = &o.data;
+    let selector = match labels_text(at(d, &["spec", "podSelector", "matchLabels"])) {
+        s if s.is_empty() => "All pods".into(),
+        s => s,
+    };
+    let types = list(d, &["spec", "policyTypes"])
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    (vec![selector, or_dash(types)], None)
+}
+
 fn config_map(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
     let keys = count_keys(&o.data, &["data"]) + count_keys(&o.data, &["binaryData"]);
     (vec![keys.to_string()], None)
@@ -522,6 +743,171 @@ fn secret(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
     let cells = vec![
         text(&o.data, &["type"]),
         count_keys(&o.data, &["data"]).to_string(),
+    ];
+    (cells, None)
+}
+
+/// `cpu 40%/80%` per metric, like the TARGETS column of `kubectl get hpa`.
+fn autoscaler(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
+    let d = &o.data;
+    let current = list(d, &["status", "currentMetrics"]);
+    let targets = list(d, &["spec", "metrics"])
+        .iter()
+        .map(|metric| {
+            let kind = text(metric, &["type"]);
+            if kind != "Resource" {
+                return kind;
+            }
+            let name = text(metric, &["resource", "name"]);
+            let now = current
+                .iter()
+                .find(|c| c["resource"]["name"] == name.as_str())
+                .map(|c| &c["resource"]["current"]);
+            let target = &metric["resource"]["target"];
+            let (now, target) = match target["averageUtilization"].as_i64() {
+                Some(goal) => (
+                    now.and_then(|c| c["averageUtilization"].as_i64())
+                        .map_or("?".into(), |n| format!("{n}%")),
+                    format!("{goal}%"),
+                ),
+                None => (
+                    now.map_or("?".into(), |c| text(c, &["averageValue"])),
+                    text(target, &["averageValue"]),
+                ),
+            };
+            format!("{name} {now}/{target}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let cells = vec![
+        format!(
+            "{}/{}",
+            text(d, &["spec", "scaleTargetRef", "kind"]),
+            text(d, &["spec", "scaleTargetRef", "name"])
+        ),
+        or_dash(targets),
+        at(d, &["spec", "minReplicas"])
+            .as_i64()
+            .unwrap_or(1)
+            .to_string(),
+        int(d, &["spec", "maxReplicas"]).to_string(),
+        int(d, &["status", "currentReplicas"]).to_string(),
+    ];
+    (cells, None)
+}
+
+fn disruption_budget(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
+    let d = &o.data;
+    let allowed = int(d, &["status", "disruptionsAllowed"]);
+    let cells = vec![
+        or_dash(text(d, &["spec", "minAvailable"])),
+        or_dash(text(d, &["spec", "maxUnavailable"])),
+        allowed.to_string(),
+    ];
+    // Nothing may be evicted now, so a node drain would wait on it.
+    (cells, Some(if allowed > 0 { OK } else { PENDING }))
+}
+
+/// `RWO, RWX`, the short forms `kubectl` prints.
+fn access_modes(value: &Value) -> String {
+    let modes = value.as_array().map_or(&[][..], Vec::as_slice);
+    let short = modes
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|m| match m {
+            "ReadWriteOnce" => "RWO",
+            "ReadOnlyMany" => "ROX",
+            "ReadWriteMany" => "RWX",
+            "ReadWriteOncePod" => "RWOP",
+            other => other,
+        })
+        .collect::<Vec<_>>();
+    or_dash(short.join(", "))
+}
+
+fn volume_claim(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
+    let d = &o.data;
+    let phase = text(d, &["status", "phase"]);
+    let tone = match phase.as_str() {
+        "Bound" => OK,
+        "Lost" => FAILED,
+        _ => PENDING,
+    };
+    let cells = vec![
+        phase,
+        or_dash(text(d, &["spec", "volumeName"])),
+        or_dash(text(d, &["status", "capacity", "storage"])),
+        access_modes(at(d, &["spec", "accessModes"])),
+        or_dash(text(d, &["spec", "storageClassName"])),
+    ];
+    (cells, Some(tone))
+}
+
+fn volume(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
+    let d = &o.data;
+    let phase = text(d, &["status", "phase"]);
+    let tone = match phase.as_str() {
+        "Bound" | "Available" => OK,
+        "Released" => DONE,
+        "Failed" => FAILED,
+        _ => PENDING,
+    };
+    let claim = match text(d, &["spec", "claimRef", "name"]) {
+        name if name.is_empty() => String::new(),
+        name => format!("{}/{name}", text(d, &["spec", "claimRef", "namespace"])),
+    };
+    let cells = vec![
+        or_dash(text(d, &["spec", "capacity", "storage"])),
+        access_modes(at(d, &["spec", "accessModes"])),
+        or_dash(text(d, &["spec", "persistentVolumeReclaimPolicy"])),
+        phase,
+        or_dash(claim),
+        or_dash(text(d, &["spec", "storageClassName"])),
+    ];
+    (cells, Some(tone))
+}
+
+fn storage_class(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
+    let d = &o.data;
+    let default = o
+        .annotations()
+        .get("storageclass.kubernetes.io/is-default-class")
+        .is_some_and(|v| v == "true");
+    let or = |path: &[&str], fallback: &str| match text(d, path) {
+        s if s.is_empty() => fallback.to_owned(),
+        s => s,
+    };
+    let cells = vec![
+        text(d, &["provisioner"]),
+        or(&["reclaimPolicy"], "Delete"),
+        or(&["volumeBindingMode"], "Immediate"),
+        if default { "Yes" } else { "No" }.into(),
+    ];
+    (cells, None)
+}
+
+fn service_account(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
+    (vec![list(&o.data, &["secrets"]).len().to_string()], None)
+}
+
+fn role(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
+    (vec![list(&o.data, &["rules"]).len().to_string()], None)
+}
+
+fn role_binding(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
+    let d = &o.data;
+    let subjects = list(d, &["subjects"])
+        .iter()
+        .map(|s| format!("{} {}", text(s, &["kind"]), text(s, &["name"])))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let cells = vec![
+        format!(
+            "{}/{}",
+            text(d, &["roleRef", "kind"]),
+            text(d, &["roleRef", "name"])
+        ),
+        or_dash(subjects),
     ];
     (cells, None)
 }
@@ -593,7 +979,7 @@ fn event(o: &DynamicObject) -> (Vec<String>, Option<Tone>) {
 }
 
 /// When an event last happened; the field depends on which API wrote it.
-fn last_seen(data: &Value) -> Option<String> {
+pub fn last_seen(data: &Value) -> Option<String> {
     [
         &["series", "lastObservedTime"][..],
         &["lastTimestamp"],
@@ -648,6 +1034,38 @@ mod tests {
         }));
         let (cells, _) = service(&o);
         assert_eq!(cells, ["NodePort", "10.0.0.1", "—", "80:30080/TCP"]);
+    }
+
+    #[test]
+    fn autoscaler_shows_utilization_against_target() {
+        let o = object(json!({
+            "spec": {
+                "scaleTargetRef": { "kind": "Deployment", "name": "web" },
+                "maxReplicas": 5,
+                "metrics": [{ "type": "Resource", "resource": {
+                    "name": "cpu", "target": { "type": "Utilization", "averageUtilization": 80 }
+                } }]
+            },
+            "status": {
+                "currentReplicas": 2,
+                "currentMetrics": [{ "type": "Resource", "resource": {
+                    "name": "cpu", "current": { "averageUtilization": 40 }
+                } }]
+            }
+        }));
+        let (cells, _) = autoscaler(&o);
+        assert_eq!(cells, ["Deployment/web", "cpu 40%/80%", "1", "5", "2"]);
+    }
+
+    #[test]
+    fn claim_shows_short_access_modes() {
+        let o = object(json!({
+            "spec": { "accessModes": ["ReadWriteOnce", "ReadOnlyMany"], "volumeName": "pv-1" },
+            "status": { "phase": "Bound", "capacity": { "storage": "10Gi" } }
+        }));
+        let (cells, tone) = volume_claim(&o);
+        assert_eq!(cells, ["Bound", "pv-1", "10Gi", "RWO, ROX", "—"]);
+        assert_eq!(tone, Some(OK));
     }
 
     #[test]

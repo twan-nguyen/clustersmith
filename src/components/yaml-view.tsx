@@ -8,9 +8,9 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
-import { applyResourceYaml, getResourceYaml } from "@/lib/kube";
+import { applyResourceYaml, createResources, getResourceYaml } from "@/lib/kube";
 import { cn, errorMessage } from "@/lib/utils";
-import type { YamlTab } from "@/store";
+import type { CreateTab, YamlTab } from "@/store";
 
 /** Blends One Dark into the panel: no own background, the app's mono font. */
 const PANEL_THEME = EditorView.theme(
@@ -22,6 +22,31 @@ const PANEL_THEME = EditorView.theme(
   },
   { dark: true },
 );
+
+/** A YAML editor in `parent` where ⌘S calls whatever `save` currently is. */
+function createEditor(
+  parent: HTMLElement,
+  doc: string,
+  save: React.RefObject<() => void>,
+  onChange: (text: string) => void,
+) {
+  return new EditorView({
+    parent,
+    state: EditorState.create({
+      doc,
+      extensions: [
+        Prec.high(keymap.of([{ key: "Mod-s", preventDefault: true, run: () => (save.current(), true) }])),
+        basicSetup,
+        yaml(),
+        oneDark,
+        PANEL_THEME,
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) onChange(update.state.doc.toString());
+        }),
+      ],
+    }),
+  });
+}
 
 type Status =
   | { kind: "loading" }
@@ -76,23 +101,9 @@ export function YamlView({ tab, active }: { tab: YamlTab; active: boolean }) {
   }
 
   useEffect(() => {
-    const view = new EditorView({
-      parent: host.current!,
-      state: EditorState.create({
-        extensions: [
-          Prec.high(
-            keymap.of([{ key: "Mod-s", preventDefault: true, run: () => (saveRef.current(), true) }]),
-          ),
-          basicSetup,
-          yaml(),
-          oneDark,
-          PANEL_THEME,
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged) setDirty(update.state.doc.toString() !== saved.current);
-          }),
-        ],
-      }),
-    });
+    const view = createEditor(host.current!, "", saveRef, (text) =>
+      setDirty(text !== saved.current),
+    );
     editor.current = view;
 
     let cancelled = false;
@@ -179,5 +190,83 @@ function StatusLabel({ status, dirty }: { status: Status; dirty: boolean }) {
       />
       {label}
     </span>
+  );
+}
+
+type CreateStatus =
+  | { kind: "idle" }
+  | { kind: "creating" }
+  | { kind: "created"; names: string[] }
+  | { kind: "error"; message: string };
+
+/**
+ * Writes new objects from scratch, like `kubectl create -f`. Several can be
+ * created at once, separated by `---`; the live lists then show them.
+ */
+export function CreateView({ tab, active }: { tab: CreateTab; active: boolean }) {
+  const host = useRef<HTMLDivElement>(null);
+  const editor = useRef<EditorView | null>(null);
+  const [status, setStatus] = useState<CreateStatus>({ kind: "idle" });
+  const createRef = useRef(() => {});
+
+  async function create() {
+    const view = editor.current;
+    if (!view || status.kind === "creating") return;
+    setStatus({ kind: "creating" });
+    try {
+      const names = await createResources(tab.context, tab.namespace, view.state.doc.toString());
+      setStatus({ kind: "created", names });
+    } catch (err) {
+      setStatus({ kind: "error", message: errorMessage(err) });
+    }
+  }
+  createRef.current = create;
+
+  useEffect(() => {
+    // Editing after a result clears it, so the label always describes the text.
+    const view = createEditor(host.current!, tab.template, createRef, () =>
+      setStatus((s) => (s.kind === "creating" ? s : { kind: "idle" })),
+    );
+    editor.current = view;
+    return () => {
+      view.destroy();
+      editor.current = null;
+    };
+  }, [tab]);
+
+  useEffect(() => {
+    if (active) editor.current?.focus();
+  }, [active]);
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex h-8 shrink-0 items-center gap-3 border-b border-border px-3 text-xs">
+        <span className="shrink-0 text-muted-foreground">
+          New resource{tab.namespace ? ` in ${tab.namespace}` : ""}
+        </span>
+        {status.kind === "error" ? (
+          <span className="truncate text-destructive" title={status.message}>
+            {status.message}
+          </span>
+        ) : status.kind === "created" ? (
+          <span className="flex min-w-0 animate-fade-in items-center gap-1.5 text-muted-foreground">
+            <span className="size-1.5 shrink-0 rounded-full bg-success" />
+            <span className="truncate">Created {status.names.join(", ")}</span>
+          </span>
+        ) : status.kind === "creating" ? (
+          <span className="text-muted-foreground">Creating…</span>
+        ) : null}
+        <Button
+          size="xs"
+          onClick={create}
+          disabled={status.kind === "creating"}
+          className="ml-auto shrink-0 gap-1.5"
+        >
+          Create
+          <Kbd className="bg-primary-foreground/15 text-primary-foreground">⌘S</Kbd>
+        </Button>
+      </div>
+      <div ref={host} className="min-h-0 flex-1 select-text" />
+    </div>
   );
 }

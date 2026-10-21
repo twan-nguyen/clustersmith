@@ -4,9 +4,13 @@ mod actions;
 mod appearance;
 mod clients;
 mod contexts;
+mod custom;
+mod details;
 mod forwards;
 mod kubeconfig;
 mod logs;
+mod metrics;
+mod nodes;
 mod pods;
 mod resources;
 mod sessions;
@@ -45,13 +49,21 @@ pub fn run() {
             pods::watch_pods,
             resources::list_resource_kinds,
             resources::watch_resources,
+            custom::list_custom_kinds,
+            details::describe_resource,
             actions::delete_resource,
             actions::restart_workload,
             actions::scale_workload,
             actions::get_resource_yaml,
             actions::apply_resource_yaml,
+            actions::create_resources,
+            metrics::get_metrics,
+            nodes::cordon_node,
+            nodes::drain_node,
             watch::stop_watch,
             logs::open_logs,
+            logs::open_workload_logs,
+            logs::save_log,
             shell::open_shell,
             shell::shell_input,
             shell::shell_resize,
