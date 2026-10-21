@@ -72,19 +72,24 @@ impl KubeconfigSources {
         }
     }
 
-    /// Merges every source in order, like `kubectl`: the first file to define a
-    /// name wins. A missing default file is skipped silently; any other file
-    /// that cannot be read is skipped and reported in its status.
-    pub fn read(&self) -> (Kubeconfig, Vec<SourceStatus>) {
+    /// Every source in order, each flagged with whether the user imported it.
+    /// A missing default file is skipped silently.
+    fn paths(&self) -> Vec<(PathBuf, bool)> {
         let imported = self.settings.lock().unwrap().kubeconfigs.clone();
         let defaults = self.defaults.iter().filter(|p| p.exists()).cloned();
-        let sources = defaults
+        defaults
             .map(|p| (p, false))
-            .chain(imported.into_iter().map(|p| (p, true)));
+            .chain(imported.into_iter().map(|p| (p, true)))
+            .collect()
+    }
 
+    /// Merges every source in order, like `kubectl`: the first file to define a
+    /// name wins. A file that cannot be read is skipped and reported in its
+    /// status. The merge lists contexts; to connect, use [`Self::config_for`].
+    pub fn read(&self) -> (Kubeconfig, Vec<SourceStatus>) {
         let mut merged = Kubeconfig::default();
         let mut statuses = Vec::new();
-        for (path, imported) in sources {
+        for (path, imported) in self.paths() {
             let result = Kubeconfig::read_from(&path).and_then(|config| {
                 let contexts = config.contexts.len();
                 merged.clone().merge(config).map(|m| (m, contexts))
@@ -104,6 +109,19 @@ impl KubeconfigSources {
             });
         }
         (merged, statuses)
+    }
+
+    /// The file that defines `context`, the first one if several do.
+    ///
+    /// Files exported from different clusters often share names: kubeadm calls
+    /// every cluster `kubernetes` and its user `kubernetes-admin`. Merged, a
+    /// context would resolve those names in whichever file came first and
+    /// connect to the wrong cluster, so each context is resolved in its own file.
+    pub fn config_for(&self, context: &str) -> Option<Kubeconfig> {
+        self.paths()
+            .into_iter()
+            .filter_map(|(path, _)| Kubeconfig::read_from(path).ok())
+            .find(|config| config.contexts.iter().any(|c| c.name == context))
     }
 
     pub fn add(&self, path: PathBuf) -> Result<(), String> {
@@ -212,6 +230,38 @@ users:
         reopened.remove(&file).unwrap();
         let reopened = KubeconfigSources::load(dir.join("app"), dir.clone());
         assert!(!has_context(&reopened, "dev"));
+    }
+
+    #[test]
+    fn context_resolves_names_in_its_own_file() {
+        // Two kubeadm clusters: same cluster and user names, different servers.
+        let kubeadm = |context: &str, server: &str| {
+            format!(
+                "clusters:
+- name: kubernetes
+  cluster: {{server: '{server}'}}
+contexts:
+- name: {context}
+  context: {{cluster: kubernetes, user: kubernetes-admin}}
+users:
+- name: kubernetes-admin
+  user: {{token: test}}
+"
+            )
+        };
+        let dir = temp_dir("same-names");
+        let (first, second) = (dir.join("first.yaml"), dir.join("second.yaml"));
+        fs::write(&first, kubeadm("staging", "https://staging:6443")).unwrap();
+        fs::write(&second, kubeadm("prod", "https://prod:6443")).unwrap();
+
+        let sources = KubeconfigSources::load(dir.join("app"), dir.clone());
+        sources.add(first).unwrap();
+        sources.add(second).unwrap();
+
+        let config = sources.config_for("prod").unwrap();
+        let server = config.clusters[0].cluster.as_ref().unwrap().server.as_deref();
+        assert_eq!(server, Some("https://prod:6443"));
+        assert!(sources.config_for("missing").is_none());
     }
 
     #[test]

@@ -15,7 +15,9 @@ impl Clients {
             return Ok(client.clone());
         }
 
-        let (kubeconfig, _) = sources.read();
+        let kubeconfig = sources
+            .config_for(context)
+            .ok_or_else(|| format!("context \"{context}\" is not in any kubeconfig file"))?;
         let options = KubeConfigOptions {
             context: Some(context.to_owned()),
             ..Default::default()
