@@ -7,6 +7,7 @@ import {
   type KubeconfigSource,
   type ObjectRef,
   type PodRow,
+  type PortForward,
   type PodTarget,
   type ResourceKind,
   type ResourceRow,
@@ -15,6 +16,8 @@ import {
   getTransparency,
   listContexts,
   listNamespaces,
+  listPortForwards,
+  onPortForwardsChanged,
   listResourceKinds,
   removeKubeconfig,
   setTransparency,
@@ -25,7 +28,7 @@ import {
 } from "@/lib/kube";
 import { errorMessage } from "@/lib/utils";
 
-export type View = "pods" | "settings";
+export type View = "pods" | "forwards" | "settings";
 export type SettingsPage = "clusters" | "kubeconfig" | "appearance";
 
 export type DockTab =
@@ -58,6 +61,8 @@ type State = {
   dockTabs: DockTab[];
   activeTab: string | null;
   dockCollapsed: boolean;
+  /** Running port forwards, across every cluster. */
+  forwards: PortForward[];
   /** How much of the macOS blur shows through the background, 0–100. */
   transparency: number;
 
@@ -155,11 +160,15 @@ export const useStore = create<State>()((set, get) => {
     dockTabs: [],
     activeTab: null,
     dockCollapsed: false,
+    forwards: [],
     transparency: 0,
 
     async init() {
       getTransparency().then((transparency) => set({ transparency }));
       listResourceKinds().then((kinds) => set({ kinds }));
+      // Forwards outlive a webview reload, so the list is read back as well as followed.
+      onPortForwardsChanged((forwards) => set({ forwards }));
+      listPortForwards().then((forwards) => set({ forwards }));
       try {
         await applyContexts(await listContexts());
       } catch (error) {

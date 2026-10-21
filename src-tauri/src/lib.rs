@@ -4,6 +4,7 @@ mod actions;
 mod appearance;
 mod clients;
 mod contexts;
+mod forwards;
 mod kubeconfig;
 mod logs;
 mod pods;
@@ -32,6 +33,7 @@ pub fn run() {
         .manage(clients::Clients::default())
         .manage(watch::ViewWatch::default())
         .manage(sessions::Sessions::default())
+        .manage(forwards::Forwards::default())
         .invoke_handler(tauri::generate_handler![
             contexts::list_contexts,
             contexts::add_kubeconfig,
@@ -54,6 +56,10 @@ pub fn run() {
             shell::shell_input,
             shell::shell_resize,
             sessions::close_session,
+            forwards::list_forward_ports,
+            forwards::start_port_forward,
+            forwards::stop_port_forward,
+            forwards::list_port_forwards,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

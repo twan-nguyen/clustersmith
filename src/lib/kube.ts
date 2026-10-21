@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export type KubeContext = {
   name: string;
@@ -195,3 +196,39 @@ export const getTransparency = () => invoke<number>("get_transparency");
 
 export const setTransparency = (percent: number) =>
   invoke<void>("set_transparency", { percent });
+
+/** A port an object declares, offered when starting a forward. */
+export type PortChoice = { port: number; name: string | null };
+
+export type PortForward = {
+  id: number;
+  context: string;
+  namespace: string;
+  resource: "pods" | "services";
+  name: string;
+  /** The pod's port, or for a service the service port. */
+  port: number;
+  localPort: number;
+  /** The pod connections currently go to. */
+  pod: string | null;
+  /** Why the last connection failed; cleared once one works again. */
+  error: string | null;
+};
+
+/** Objects whose ⋯ menu offers port forwarding. */
+export const forwardable = (resource: string) => resource === "pods" || resource === "services";
+
+export const listForwardPorts = (ref: ObjectRef) =>
+  invoke<PortChoice[]>("list_forward_ports", objectArgs(ref));
+
+export const startPortForward = (ref: ObjectRef, port: number, localPort: number | null) =>
+  invoke<PortForward>("start_port_forward", { ...objectArgs(ref), port, localPort });
+
+export const stopPortForward = (id: number) => invoke<void>("stop_port_forward", { id });
+
+export const listPortForwards = () => invoke<PortForward[]>("list_port_forwards");
+
+export const onPortForwardsChanged = (handler: (forwards: PortForward[]) => void) =>
+  listen<PortForward[]>("port-forwards-changed", (event) => handler(event.payload));
+
+export const forwardUrl = (forward: PortForward) => `http://localhost:${forward.localPort}`;

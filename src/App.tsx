@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { CommandPalette } from "@/components/command-palette";
 import { Dock } from "@/components/dock";
 import { PodsView } from "@/components/pods-view";
+import { PortForwardsView } from "@/components/port-forwards-view";
 import { ResourceView } from "@/components/resource-view";
 import { SettingsView } from "@/components/settings-view";
 import { Sidebar } from "@/components/sidebar";
@@ -55,6 +56,8 @@ function App() {
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           {view === "settings" ? (
             <SettingsView />
+          ) : view === "forwards" ? (
+            <PortForwardsView />
           ) : kind && kind.id !== "pods" ? (
             // Keyed so sorting and scroll start fresh for each kind.
             <ResourceView key={kind.id} kind={kind} />

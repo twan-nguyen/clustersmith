@@ -34,6 +34,7 @@ App Store does not accept; distribute outside the store.
 - `src-tauri/src/pods.rs`, `resources.rs`: pods, and the other kinds with their columns
 - `src-tauri/src/actions.rs`: delete, restart, scale, and YAML edit
 - `src-tauri/src/logs.rs`, `shell.rs`, `sessions.rs`: log streams and `exec` shells in the dock
+- `src-tauri/src/forwards.rs`: port forwards to pods and services, one stream per connection
 - `src-tauri/src/appearance.rs`: window translucency
 - `src/store.ts`: UI state, the live list subscription and dock tabs
 - `src/components/`: sidebar, resource lists, dock, Settings (`⌘,`), command palette (`⌘K`)

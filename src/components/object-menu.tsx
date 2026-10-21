@@ -1,6 +1,7 @@
-import { Ellipsis, FileCode, RotateCw, Scaling, Trash2 } from "lucide-react";
+import { Cable, Ellipsis, FileCode, RotateCw, Scaling, Trash2 } from "lucide-react";
 import { useId, useState } from "react";
 
+import { PortForwardDialog } from "@/components/port-forward-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -21,13 +22,14 @@ import {
   type ObjectRef,
   type ResourceKind,
   deleteResource,
+  forwardable,
   restartWorkload,
   scaleWorkload,
 } from "@/lib/kube";
 import { errorMessage } from "@/lib/utils";
 import { useStore } from "@/store";
 
-type Pending = "delete" | "restart" | "scale" | null;
+type Pending = "delete" | "restart" | "scale" | "forward" | null;
 
 /**
  * The "⋯" menu on a row. Anything that changes the cluster asks first; the
@@ -64,6 +66,12 @@ export function ObjectMenu({
             <FileCode />
             Edit YAML
           </DropdownMenuItem>
+          {forwardable(object.resource) && (
+            <DropdownMenuItem onSelect={() => setPending("forward")}>
+              <Cable />
+              Port forward…
+            </DropdownMenuItem>
+          )}
           {kind?.restartable && (
             <DropdownMenuItem onSelect={() => setPending("restart")}>
               <RotateCw />
@@ -104,6 +112,11 @@ export function ObjectMenu({
         description="Pods are replaced one by one, like kubectl rollout restart."
         confirmLabel="Restart"
         onConfirm={() => restartWorkload(object)}
+      />
+      <PortForwardDialog
+        open={pending === "forward"}
+        onClose={() => setPending(null)}
+        object={object}
       />
       <ScaleDialog
         open={pending === "scale"}

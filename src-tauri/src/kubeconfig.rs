@@ -259,7 +259,12 @@ users:
         sources.add(second).unwrap();
 
         let config = sources.config_for("prod").unwrap();
-        let server = config.clusters[0].cluster.as_ref().unwrap().server.as_deref();
+        let server = config.clusters[0]
+            .cluster
+            .as_ref()
+            .unwrap()
+            .server
+            .as_deref();
         assert_eq!(server, Some("https://prod:6443"));
         assert!(sources.config_for("missing").is_none());
     }

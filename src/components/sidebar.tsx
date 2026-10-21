@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  Cable,
   Check,
   ChevronDown,
   ChevronsUpDown,
@@ -42,7 +43,7 @@ export function Sidebar() {
 }
 
 function AppNav() {
-  const { setPaletteOpen, kinds, kind, selectKind } = useStore();
+  const { setPaletteOpen, kinds, kind, selectKind, view, setView, forwards } = useStore();
   // Kinds arrive in sidebar order; group them by section, keeping that order.
   const sections = useMemo(() => {
     const groups = new Map<string, ResourceKind[]>();
@@ -74,10 +75,19 @@ function AppNav() {
                 key={k.id}
                 icon={<KindIcon kind={k.id} />}
                 label={k.label}
-                active={k.id === kind}
-                onClick={() => k.id !== kind && selectKind(k.id)}
+                active={view === "pods" && k.id === kind}
+                onClick={() => (k.id !== kind ? selectKind(k.id) : setView("pods"))}
               />
             ))}
+            {section === "Network" && (
+              <NavItem
+                icon={<Cable />}
+                label="Port Forwards"
+                count={forwards.length}
+                active={view === "forwards"}
+                onClick={() => setView("forwards")}
+              />
+            )}
           </Section>
         ))}
       </nav>
@@ -216,12 +226,15 @@ function NavItem({
   icon,
   label,
   title,
+  count,
   active,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
   title?: string;
+  /** Shown at the end when above zero. */
+  count?: number;
   active?: boolean;
   onClick?: () => void;
 }) {
@@ -236,7 +249,10 @@ function NavItem({
       )}
     >
       {icon}
-      <span className="truncate">{label}</span>
+      <span className="flex-1 truncate">{label}</span>
+      {count ? (
+        <span className="animate-fade-in text-xs text-muted-foreground tabular-nums">{count}</span>
+      ) : null}
     </button>
   );
 }
